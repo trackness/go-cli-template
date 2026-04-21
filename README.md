@@ -10,15 +10,20 @@ target facts live in [`PROJECT.md`](PROJECT.md).
 
 1. Click **Use this template** on GitHub.
 2. Clone the new repo locally.
-3. Replace `go-cli-template` (lowercase, kebab) with the new CLI name in:
-   - `go.mod` (module path)
-   - `cmd/go-cli-template/` (rename the directory)
+3. Rename the module path. The template ships as
+   `github.com/example/go-cli-template`; change both halves — the host
+   segment (`github.com/example/`) and the CLI name
+   (`go-cli-template`) — to your chosen module path
+   (e.g. `github.com/<owner>/<cli-name>`) in:
+   - `go.mod` (the `module` statement)
+   - every Go import (rewrite in bulk with `gofmt -r` or your editor)
+   - `cmd/go-cli-template/` (rename the directory to match the new CLI name)
    - `Taskfile.yml` (the `CLI_NAME` variable)
    - `.goreleaser.yaml` (the `project_name` field)
-   - every Go import
-4. Replace `GO_CLI_TEMPLATE` (upper, snake) with the uppercase form in
-   `internal/cli/root.go` (the `envVarPrefix` constant, which drives the
-   config env-var prefix and auto-discovery path).
+4. Update the identity constants in `internal/cli/root.go`: `cliName`
+   (lowercase-kebab; drives help strings, User-Agent, XDG config path,
+   cobra annotation keys) and `envVarPrefix` (`GO_CLI_TEMPLATE_`; drives
+   env-var prefix and auto-discovery path).
 5. Rename `internal/target/` to match the target system (e.g.
    `internal/traefik/`). Update the import in `internal/cli/root.go`
    accordingly.
@@ -28,3 +33,7 @@ target facts live in [`PROJECT.md`](PROJECT.md).
 9. Write the first target-system command under `internal/cli/` and wire it
    into `internal/cli/root.go`. Add a golden fixture in `testdata/` per the
    convention in `testdata/README.md`.
+10. If you opt into codegen (per `CLAUDE.md` "API client generation") or
+    mock generation (per `CLAUDE.md` "Mocking / test doubles"), add a
+    `generate` task to `Taskfile.yml` — the template does not ship one
+    by default.
