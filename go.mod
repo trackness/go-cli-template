@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	github.com/go-resty/resty/v2 v2.17.2
+	github.com/google/go-cmp v0.7.0
 	github.com/jedib0t/go-pretty/v6 v6.7.9
 	github.com/knadh/koanf/parsers/yaml v1.1.0
 	github.com/knadh/koanf/providers/env/v2 v2.0.0

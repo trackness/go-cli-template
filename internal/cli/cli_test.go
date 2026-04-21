@@ -10,6 +10,7 @@ import (
 
 	"github.com/example/go-cli-template/internal/cli"
 	"github.com/example/go-cli-template/internal/output"
+	"github.com/example/go-cli-template/internal/testutil"
 )
 
 // isolatedEnv sterilises the environment the CLI resolves config from
@@ -570,6 +571,69 @@ func TestRun_Commands_ConfigView_HumanOutputFalse(t *testing.T) {
 	if !found {
 		t.Errorf("config view entry missing from commands output; got: %v", got.Commands)
 	}
+}
+
+// Golden tests pin the full JSON wire shape of contract-bearing
+// commands. Regenerate after an intentional shape change:
+//
+//	go test ./internal/cli/... -update
+//
+// The field-level tests elsewhere in this file cover behavioural
+// invariants; these tests fence byte-for-byte regressions skills
+// would otherwise discover in production.
+
+func TestRun_Version_Golden(t *testing.T) {
+	isolatedEnv(t)
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{"version"},
+		&stdout,
+		&stderr,
+	)
+	if code != output.ExitSuccess {
+		t.Fatalf("exit code = %d (stderr=%q)", code, stderr.String())
+	}
+	testutil.AssertGolden(t, "testdata/version.json", stdout.Bytes())
+}
+
+func TestRun_Commands_Golden(t *testing.T) {
+	// The CommandsOutput JSON shape is a versioned contract surface
+	// (CLAUDE.md C6). Golden comparison catches any field add/remove
+	// or reorder that field-level tests would miss.
+	isolatedEnv(t)
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{"commands"},
+		&stdout,
+		&stderr,
+	)
+	if code != output.ExitSuccess {
+		t.Fatalf("exit code = %d (stderr=%q)", code, stderr.String())
+	}
+	testutil.AssertGolden(t, "testdata/commands.json", stdout.Bytes())
+}
+
+func TestRun_ConfigView_Golden(t *testing.T) {
+	// --config="" disables file loading and yields a deterministic
+	// config_path_source of "flag-disabled" so the golden doesn't
+	// embed a platform-varying XDG path.
+	isolatedEnv(t)
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{"--config=", "config", "view"},
+		&stdout,
+		&stderr,
+	)
+	if code != output.ExitSuccess {
+		t.Fatalf("exit code = %d (stderr=%q)", code, stderr.String())
+	}
+	testutil.AssertGolden(t, "testdata/config_view_no_config.json", stdout.Bytes())
 }
 
 func TestRun_Version_JSONMode_Succeeds(t *testing.T) {
