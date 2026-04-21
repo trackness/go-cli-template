@@ -122,6 +122,11 @@ func TestRun_InvalidOutputMode_Errors(t *testing.T) {
 	if env.Error.Code != output.ErrCodeInvalidOutputMode {
 		t.Errorf("error.code = %q, want %q", env.Error.Code, output.ErrCodeInvalidOutputMode)
 	}
+	// Echo the bad value back so skills can diagnose without re-parsing
+	// the invocation — locks the message contract, not just the code.
+	if !strings.Contains(env.Error.Message, `"xml"`) {
+		t.Errorf("error.message = %q, want to contain %q", env.Error.Message, `"xml"`)
+	}
 }
 
 func TestRun_UnknownFlag_ErrorsInvalidFlag(t *testing.T) {

@@ -8,10 +8,16 @@ import (
 )
 
 // TestMapCobraNativeError_KnownPrefixes locks the message-prefix
-// detection against cobra/pflag prose changes. If a dependency bump
+// detection against upstream prose changes. If a dependency bump
 // rewords one of these, the test fails loudly rather than silently
-// falling back to ErrCodeUnknown. Messages are taken verbatim from
-// cobra/pflag sources as of the currently pinned version.
+// falling back to ErrCodeUnknown.
+//
+// Message provenance as of the pinned versions:
+//   - "unknown flag: ..." and "unknown shorthand flag: ..." — pflag.
+//   - "unknown command ..." — cobra.
+//   - "flag provided but not defined: ..." — stdlib flag package;
+//     defensive coverage for code paths that might use it directly or
+//     through a dependency.
 func TestMapCobraNativeError_KnownPrefixes(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -507,6 +507,13 @@ func resolveErrorMode(cmd *cobra.Command) string {
 // by message prefix and wraps them in *output.Error with a stable
 // code. Returns nil when no prefix matches. Caller (writeErrorAndExit)
 // guarantees err is not already a *output.Error.
+//
+// Coverage is deliberately narrow — only the cobra/pflag errors skills
+// commonly branch on are mapped. Other pflag typed errors
+// (ValueRequiredError, InvalidValueError, InvalidSyntaxError) fall
+// through to UNKNOWN; extend here if a skill needs to distinguish
+// them. Locked against upstream message-wording drift by
+// TestMapCobraNativeError_KnownPrefixes.
 func mapCobraNativeError(err error) *output.Error {
 	msg := err.Error()
 	switch {
