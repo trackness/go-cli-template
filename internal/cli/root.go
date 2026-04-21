@@ -364,6 +364,20 @@ func subcommandRequiredError(path string) *output.Error {
 	}
 }
 
+// newGroupCommand constructs a cobra.Command for a command group — a
+// non-leaf command that exists only to hold subcommands. Bare
+// invocation of the group errors with SUBCOMMAND_REQUIRED rather than
+// dumping help to stdout.
+func newGroupCommand(use, short string) *cobra.Command {
+	return &cobra.Command{
+		Use:   use,
+		Short: short,
+		RunE: func(c *cobra.Command, _ []string) error {
+			return subcommandRequiredError(c.CommandPath())
+		},
+	}
+}
+
 // writeErrorAndExit renders err to the command's configured stderr in
 // the current output mode and returns the process exit code. Best-
 // effort mode detection: if the --output flag has been parsed, use its
