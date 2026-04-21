@@ -72,10 +72,13 @@ func walkCommands(root *cobra.Command) CommandsOutput {
 			return
 		}
 		entries = append(entries, CommandEntry{
-			Path:        path,
-			Short:       cmd.Short,
-			Flags:       collectFlags(cmd),
-			HumanOutput: cmd.Annotations[annotationMachineOnly] != "true",
+			Path:  path,
+			Short: cmd.Short,
+			Flags: collectFlags(cmd),
+			// Groups (commands with subcommands) never render human
+			// output — they dispatch or error with SUBCOMMAND_REQUIRED.
+			// Leaves render unless explicitly annotated machine-only.
+			HumanOutput: !cmd.HasSubCommands() && cmd.Annotations[annotationMachineOnly] != "true",
 			Idempotent:  cmd.Annotations[annotationIdempotent] == "true",
 		})
 		children := append([]*cobra.Command(nil), cmd.Commands()...)

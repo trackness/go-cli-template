@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/example/go-cli-template/internal/cli"
@@ -222,6 +223,54 @@ func TestRun_Env_LogLevel_KeyUsesDashes(t *testing.T) {
 	}
 	if v.Source != "env" {
 		t.Errorf("values[log-level].source = %q, want %q", v.Source, "env")
+	}
+}
+
+func TestRun_Commands_Groups_HumanOutputFalse(t *testing.T) {
+	isolatedEnv(t)
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{"commands"},
+		&stdout,
+		&stderr,
+	)
+
+	if code != output.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d (stderr=%q)", code, output.ExitSuccess, stderr.String())
+	}
+
+	var got struct {
+		Commands []struct {
+			Path        []string `json:"path"`
+			HumanOutput bool     `json:"human_output"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; stdout=%q", err, stdout.String())
+	}
+
+	// Non-leaf commands (root with children, config group) cannot render
+	// a human form — they dispatch or error with SUBCOMMAND_REQUIRED.
+	// Introspection must agree with runtime so skills can trust the
+	// human_output field.
+	want := map[string]bool{"": false, "config": false}
+	found := map[string]bool{}
+	for _, cmd := range got.Commands {
+		key := strings.Join(cmd.Path, "/")
+		if _, ok := want[key]; ok {
+			found[key] = true
+			if cmd.HumanOutput {
+				t.Errorf("path %q (group): human_output = true, want false", key)
+			}
+		}
+	}
+	for key := range want {
+		if !found[key] {
+			t.Errorf("expected path %q missing from commands output", key)
+		}
 	}
 }
 
