@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"os"
 	"sort"
 
 	"github.com/spf13/cobra"
@@ -39,7 +38,7 @@ func newConfigViewCommand() *cobra.Command {
 					ExitCode: output.ExitUserError,
 				}
 			}
-			return output.WriteJSON(os.Stdout, buildConfigView(deps.Config, deps.Flags.configSource))
+			return output.WriteJSON(deps.Stdout, buildConfigView(deps.Config, deps.Flags.configSource))
 		},
 	}
 }

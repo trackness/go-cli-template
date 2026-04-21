@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"os"
 	"sort"
 
 	"github.com/spf13/cobra"
@@ -60,7 +59,7 @@ func newCommandsCommand(root *cobra.Command) *cobra.Command {
 					ExitCode: output.ExitUserError,
 				}
 			}
-			return output.WriteJSON(os.Stdout, walkCommands(root))
+			return output.WriteJSON(deps.Stdout, walkCommands(root))
 		},
 	}
 }

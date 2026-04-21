@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -69,7 +70,9 @@ type Flags struct {
 }
 
 // Deps is the bag of shared dependencies constructed in
-// PersistentPreRunE and stored in the command's context.
+// PersistentPreRunE and stored in the command's context. Stdout and
+// Stderr are the writers threaded through from Run so commands (and
+// tests) never touch os.Stdout/os.Stderr directly.
 type Deps struct {
 	Flags  *Flags
 	Build  BuildInfo
@@ -77,6 +80,8 @@ type Deps struct {
 	HTTP   *http.Client
 	Resty  *resty.Client
 	Config *ConfigLayers
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
 // ConfigLayers holds each source's koanf instance separately so that
@@ -92,10 +97,11 @@ type ConfigLayers struct {
 
 type depsKey struct{}
 
-// Run builds the root command and executes it against args. Intended
-// to be invoked from main; returns the process exit code.
-func Run(ctx context.Context, bi BuildInfo, args []string) output.ExitCode {
-	cmd := NewRoot(bi)
+// Run builds the root command and executes it against args. stdout and
+// stderr are threaded through to subcommands via Deps; pass os.Stdout
+// and os.Stderr from main, bytes.Buffer from tests.
+func Run(ctx context.Context, bi BuildInfo, args []string, stdout, stderr io.Writer) output.ExitCode {
+	cmd := NewRoot(bi, stdout, stderr)
 	cmd.SetArgs(args)
 	cmd.SetContext(ctx)
 	if err := cmd.Execute(); err != nil {
@@ -105,8 +111,10 @@ func Run(ctx context.Context, bi BuildInfo, args []string) output.ExitCode {
 }
 
 // NewRoot builds the cobra command tree. Exported so tests can drive
-// individual subcommands without invoking os.Exit.
-func NewRoot(bi BuildInfo) *cobra.Command {
+// individual subcommands without invoking os.Exit. stdout and stderr
+// are routed to Deps.Stdout / Deps.Stderr and (for cobra's own help and
+// error output) via cmd.SetOut / cmd.SetErr.
+func NewRoot(bi BuildInfo, stdout, stderr io.Writer) *cobra.Command {
 	flags := &Flags{}
 
 	cmd := &cobra.Command{
@@ -123,10 +131,17 @@ func NewRoot(bi BuildInfo) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			deps.Stdout = stdout
+			deps.Stderr = stderr
 			c.SetContext(context.WithValue(c.Context(), depsKey{}, deps))
 			return nil
 		},
 	}
+	// Route cobra's help and usage to stderr; stdout is reserved for
+	// command output. SetErr is explicit so writeErrorAndExit can read
+	// cmd.ErrOrStderr() regardless of whether cobra is also writing.
+	cmd.SetOut(stderr)
+	cmd.SetErr(stderr)
 	registerPersistentFlags(cmd, flags)
 
 	cmd.AddCommand(newVersionCommand())
@@ -335,16 +350,16 @@ func resolveConfigPath(pfs *pflag.FlagSet, explicit string) (path, source string
 	return "", "none"
 }
 
-// writeErrorAndExit renders err to stderr in the current output mode
-// and returns the process exit code. Best-effort mode detection: if the
-// --output flag has been parsed, use its value; otherwise fall back to
-// JSON (skills never assume human).
+// writeErrorAndExit renders err to the command's configured stderr in
+// the current output mode and returns the process exit code. Best-
+// effort mode detection: if the --output flag has been parsed, use its
+// value; otherwise fall back to JSON (skills never assume human).
 func writeErrorAndExit(cmd *cobra.Command, err error) output.ExitCode {
 	mode := "json"
 	if f := cmd.Root().PersistentFlags().Lookup("output"); f != nil {
 		mode = f.Value.String()
 	}
-	output.WriteError(os.Stderr, mode, err)
+	output.WriteError(cmd.ErrOrStderr(), mode, err)
 
 	var oe *output.Error
 	if errors.As(err, &oe) {
