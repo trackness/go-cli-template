@@ -124,6 +124,34 @@ func TestRedactCurl_ShellEscapedQuoteInValue(t *testing.T) {
 	}
 }
 
+func TestRedactCurl_TrailingHeaderNoURL(t *testing.T) {
+	// Exercises the closeIdx == len(piece)-1 branch — a curl line that
+	// ends with the -H arg and nothing after. Resty always emits URL
+	// last so this shape doesn't arise from the live pipeline, but
+	// descendants constructing curl strings by hand (tests, custom
+	// debug middleware) can hit it. The end-of-string close-quote
+	// branch must not leak.
+	in := `curl -X GET -H 'Authorization: Bearer secret-xyz'`
+	got := output.RedactCurl(in)
+	if strings.Contains(got, "secret-xyz") {
+		t.Errorf("secret leaked at end-of-string: %q", got)
+	}
+	if !strings.Contains(got, output.Redacted) {
+		t.Errorf("redacted placeholder missing: %q", got)
+	}
+}
+
+func TestRedactDumpHeaders_NonSensitivePassThrough(t *testing.T) {
+	// Explicit non-sensitive-dump-headers case so the pass-through
+	// branch of redactDumpHeaders is locked against a regex regression
+	// that would over-match.
+	in := "HEADERS:\n\tContent-Type: application/json\n\tAccept: application/json\n"
+	got := output.RedactCurl(in)
+	if got != in {
+		t.Errorf("non-sensitive dump headers mutated:\n  before: %q\n  after:  %q", in, got)
+	}
+}
+
 func TestRedactCurl_RestyDumpHeadersBlock(t *testing.T) {
 	// Resty's EnableGenerateCurlOnDebug emits the curl line PLUS a
 	// REQUEST dump whose HEADERS block reprints every header tab-
