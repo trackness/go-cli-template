@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -11,20 +12,26 @@ import (
 	"github.com/example/go-cli-template/internal/output"
 )
 
-// isolatedEnv sets the environment variables tests rely on to known
-// values, preventing host leakage. It uses t.Setenv so all writes are
-// restored at test end. Pass empty string to disable file-config loading.
+// isolatedEnv sterilises the environment the CLI resolves config from
+// so tests never read host state.
+//
+//   - XDG_CONFIG_HOME (anchor for config-file discovery on POSIX) and
+//     HOME (POSIX fallback and Windows-adjacent) both go to temp dirs
+//     so a regression in one still leaves no host-path to fall back to.
+//   - Every GO_CLI_TEMPLATE_* env var currently set is blanked. Using
+//     a prefix scan rather than a hand-maintained list keeps the helper
+//     durable as descendants add new flags with env mappings.
+//
+// t.Setenv restores all writes at test end.
 func isolatedEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	// Null out any env var that would override a test flag; t.Setenv
-	// restores the original on test end.
-	t.Setenv("GO_CLI_TEMPLATE_CONFIG", "")
-	t.Setenv("GO_CLI_TEMPLATE_OUTPUT", "")
-	t.Setenv("GO_CLI_TEMPLATE_LOG_LEVEL", "")
-	t.Setenv("GO_CLI_TEMPLATE_TIMEOUT", "")
-	t.Setenv("GO_CLI_TEMPLATE_YES", "")
-	t.Setenv("GO_CLI_TEMPLATE_DRY_RUN", "")
+	t.Setenv("HOME", t.TempDir())
+	for _, entry := range os.Environ() {
+		if k, _, ok := strings.Cut(entry, "="); ok && strings.HasPrefix(k, "GO_CLI_TEMPLATE_") {
+			t.Setenv(k, "")
+		}
+	}
 }
 
 // errorEnvelope is the parsed shape of stderr in JSON error cases.
