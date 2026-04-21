@@ -112,6 +112,7 @@ func newTestClient(srv *httptest.Server) *resty.Client {
 		SetRetryWaitTime(retryBaseWait).
 		SetRetryMaxWaitTime(retryAfterCap).
 		SetRetryAfter(retryAfter).
+		OnAfterResponse(enforceRetryAfterCap).
 		AddRetryCondition(retryCondition)
 }
 
@@ -380,6 +381,43 @@ func newFetchCmd(baseURL string) *cobra.Command {
 			_, err := deps.Resty.R().Get("/")
 			return err
 		},
+	}
+}
+
+func TestRetryAfterCap_FiresUnderNoRetry(t *testing.T) {
+	// F5: the 10s Retry-After cap must fire regardless of --no-retry.
+	// Previously the abort lived inside the RetryAfter callback which
+	// resty skips when SetRetryCount is 0, so a hostile server could
+	// hand a --no-retry invocation a raw 429 with Retry-After: 99999.
+	// The cap moves to OnAfterResponse which always fires.
+	sterilizeEnv(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "15")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+
+	flags := &Flags{Output: "json", LogLevel: "info", Timeout: 5 * time.Second, NoRetry: true}
+	deps, err := buildDeps(BuildInfo{Version: "test-v0.0.0"}, flags, newBuildDepsPflagSet())
+	if err != nil {
+		t.Fatalf("buildDeps: %v", err)
+	}
+	deps.Resty.SetBaseURL(srv.URL)
+
+	_, err = deps.Resty.R().Get("/")
+	if err == nil {
+		t.Fatal("err = nil, want RETRY_AFTER_TOO_LONG even with --no-retry")
+	}
+	var oe *output.Error
+	if !errors.As(err, &oe) {
+		t.Fatalf("err not *output.Error: %v", err)
+	}
+	if oe.Code != output.ErrCodeRetryAfterTooLong {
+		t.Errorf("code = %q, want %q", oe.Code, output.ErrCodeRetryAfterTooLong)
+	}
+	if oe.ExitCode != output.ExitTargetError {
+		t.Errorf("exit code = %d, want %d", oe.ExitCode, output.ExitTargetError)
 	}
 }
 

@@ -304,6 +304,7 @@ func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
 		SetRetryMaxWaitTime(retryAfterCap).
 		AddRetryCondition(retryCondition).
 		SetRetryAfter(retryAfter).
+		OnAfterResponse(enforceRetryAfterCap).
 		SetLogger(&slogRestyLogger{Logger: logger})
 	if level == slog.LevelDebug {
 		r.EnableGenerateCurlOnDebug()
