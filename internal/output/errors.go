@@ -38,6 +38,7 @@ const (
 	ErrCodeHumanOutputNotSupported = "HUMAN_OUTPUT_NOT_SUPPORTED"
 	ErrCodeInvalidFlag             = "INVALID_FLAG"
 	ErrCodeInvalidLogLevel         = "INVALID_LOG_LEVEL"
+	ErrCodeInvalidOutputMode       = "INVALID_OUTPUT_MODE"
 	ErrCodeMalformedConfigFile     = "MALFORMED_CONFIG_FILE"
 	ErrCodeMissingRequiredValue    = "MISSING_REQUIRED_VALUE"
 	ErrCodeSubcommandRequired      = "SUBCOMMAND_REQUIRED"

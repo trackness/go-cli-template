@@ -92,6 +92,30 @@ func TestRun_BareConfigGroup_ErrorsSubcommandRequired(t *testing.T) {
 	}
 }
 
+func TestRun_InvalidOutputMode_Errors(t *testing.T) {
+	isolatedEnv(t)
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{"--output", "xml", "version"},
+		&stdout,
+		&stderr,
+	)
+
+	if code != output.ExitUserError {
+		t.Errorf("exit code = %d, want %d (stderr=%q)", code, output.ExitUserError, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout non-empty: %q", stdout.String())
+	}
+	env := parseErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != output.ErrCodeInvalidOutputMode {
+		t.Errorf("error.code = %q, want %q", env.Error.Code, output.ErrCodeInvalidOutputMode)
+	}
+}
+
 func TestRun_Version_JSONMode_Succeeds(t *testing.T) {
 	isolatedEnv(t)
 

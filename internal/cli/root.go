@@ -176,6 +176,17 @@ func depsFromContext(ctx context.Context) *Deps {
 }
 
 func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
+	// Output mode must be one of the contract-declared values. Enforce
+	// before any work so an unsupported mode fails fast with a stable
+	// error code rather than silently falling through to default JSON.
+	if f.Output != "json" && f.Output != "human" {
+		return nil, &output.Error{
+			Code:     output.ErrCodeInvalidOutputMode,
+			Message:  fmt.Sprintf("invalid --output %q (want json or human)", f.Output),
+			ExitCode: output.ExitUserError,
+		}
+	}
+
 	// Logger — slog text handler to stderr. All logs go to stderr
 	// regardless of output mode; stdout is reserved for command output.
 	var level slog.Level

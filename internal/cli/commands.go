@@ -135,6 +135,7 @@ func errorCodeList() []string {
 		output.ErrCodeHumanOutputNotSupported,
 		output.ErrCodeInvalidFlag,
 		output.ErrCodeInvalidLogLevel,
+		output.ErrCodeInvalidOutputMode,
 		output.ErrCodeMalformedConfigFile,
 		output.ErrCodeMissingRequiredValue,
 		output.ErrCodeSubcommandRequired,
