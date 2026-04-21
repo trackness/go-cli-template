@@ -54,7 +54,7 @@ func buildConfigView(layers *ConfigLayers, pathSource string) ConfigViewOutput {
 	sort.Strings(keys)
 	for _, k := range keys {
 		out.Values[k] = ConfigValue{
-			Value:  layers.Merged.Get(k),
+			Value:  output.RedactValue(k, layers.Merged.Get(k)),
 			Source: attributeSource(layers, k),
 		}
 	}
