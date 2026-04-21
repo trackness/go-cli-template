@@ -15,8 +15,11 @@ alongside their goldens, named `<command>.<variant>.response.<ext>`.
 
 ## Regeneration
 
-Goldens are captured by the test harness under an update flag (e.g.
-`go test ./... -update`). Do not edit by hand.
+Fixtures are captured by `internal/testutil.AssertGolden`. Regenerate
+after an intentional shape change with:
 
-Per `CLAUDE.md` (Audience and output contract), any output shape change
-requires a golden update and bumps the major version.
+    go test ./... -update
+
+Do not edit by hand. Per `CLAUDE.md` (Audience and output contract),
+any output shape change requires a golden update and bumps the major
+version.

@@ -1,0 +1,121 @@
+{
+  "name": "go-cli-template",
+  "commands": [
+    {
+      "path": [],
+      "short": "Template for Go CLIs wrapping REST target systems",
+      "flags": [
+        {
+          "name": "config",
+          "type": "string",
+          "default": "",
+          "description": "config file path; unset auto-discovers, empty disables file loading",
+          "persistent": true
+        },
+        {
+          "name": "dry-run",
+          "type": "bool",
+          "default": "false",
+          "description": "dry-run: mutating commands do not mutate",
+          "persistent": true
+        },
+        {
+          "name": "log-level",
+          "type": "string",
+          "default": "info",
+          "description": "log level: debug, info, warn, error",
+          "persistent": true
+        },
+        {
+          "name": "no-retry",
+          "type": "bool",
+          "default": "false",
+          "description": "disable automatic retry of transient GET/HEAD failures",
+          "persistent": true
+        },
+        {
+          "name": "output",
+          "shorthand": "o",
+          "type": "string",
+          "default": "json",
+          "description": "output mode: json or human",
+          "persistent": true
+        },
+        {
+          "name": "timeout",
+          "type": "duration",
+          "default": "30s",
+          "description": "overall request timeout",
+          "persistent": true
+        },
+        {
+          "name": "yes",
+          "type": "bool",
+          "default": "false",
+          "description": "assume yes for confirmations; required for mutating commands",
+          "persistent": true
+        }
+      ],
+      "human_output": false,
+      "idempotent": false
+    },
+    {
+      "path": [
+        "commands"
+      ],
+      "short": "Emit the full command tree as JSON (introspection for skills)",
+      "flags": [],
+      "human_output": false,
+      "idempotent": true
+    },
+    {
+      "path": [
+        "config"
+      ],
+      "short": "Inspect configuration",
+      "flags": [],
+      "human_output": false,
+      "idempotent": false
+    },
+    {
+      "path": [
+        "config",
+        "view"
+      ],
+      "short": "Emit resolved config with per-value source attribution",
+      "flags": [],
+      "human_output": false,
+      "idempotent": true
+    },
+    {
+      "path": [
+        "version"
+      ],
+      "short": "Emit the CLI version",
+      "flags": [],
+      "human_output": true,
+      "idempotent": true
+    }
+  ],
+  "exit_codes": {
+    "INTERRUPTED": 130,
+    "SUCCESS": 0,
+    "TARGET_ERROR": 2,
+    "TRANSPORT_ERROR": 3,
+    "USER_ERROR": 1
+  },
+  "error_codes": [
+    "CONFIRMATION_REQUIRED",
+    "HUMAN_OUTPUT_NOT_SUPPORTED",
+    "INVALID_FLAG",
+    "INVALID_LOG_LEVEL",
+    "INVALID_OUTPUT_MODE",
+    "MALFORMED_CONFIG_FILE",
+    "MISSING_REQUIRED_VALUE",
+    "RETRY_AFTER_TOO_LONG",
+    "SUBCOMMAND_REQUIRED",
+    "UNKNOWN",
+    "UNKNOWN_COMMAND"
+  ]
+}
+
