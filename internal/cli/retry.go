@@ -132,10 +132,9 @@ func jitteredBackoff(attempt int) time.Duration {
 	if base > retryMaxWait {
 		base = retryMaxWait
 	}
+	// spread is 20% of base in ns. For the const-defined base values
+	// (100ms … 5s) spread is always > 0; no defensive guard needed.
 	spread := int64(float64(base) * 0.2)
-	if spread <= 0 {
-		return base
-	}
 	// rand.Int64N(2*spread) produces [0, 2*spread); subtract spread to
 	// centre the jitter on base, yielding [base-spread, base+spread).
 	return base + time.Duration(rand.Int64N(2*spread)) - time.Duration(spread)
