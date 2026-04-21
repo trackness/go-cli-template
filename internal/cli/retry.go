@@ -1,7 +1,7 @@
 package cli
 
 import (
-	stderrors "errors"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
@@ -36,7 +36,7 @@ const retryMaxWait = 5 * time.Second
 // already been diagnosed, retrying would only repeat the diagnosis.
 func retryCondition(resp *resty.Response, err error) bool {
 	var oe *output.Error
-	if stderrors.As(err, &oe) {
+	if errors.As(err, &oe) {
 		return false
 	}
 	if resp == nil {
@@ -66,10 +66,11 @@ func retryCondition(resp *resty.Response, err error) bool {
 // cannot hand a retries-disabled invocation a raw 429 with
 // Retry-After: 99999.
 //
-// The returned *output.Error propagates through resty as the request
-// error. retryCondition treats any *output.Error as terminal so the
-// retry loop (when enabled) exits immediately rather than retrying
-// the same doomed request.
+// The returned *output.Error travels through resty's retry machinery
+// wrapped and unwrapped (see client.go/request.go in resty); callers
+// ultimately see the raw *output.Error type. retryCondition treats
+// any *output.Error as terminal so the retry loop (when enabled)
+// exits immediately rather than retrying the same doomed request.
 func enforceRetryAfterCap(_ *resty.Client, resp *resty.Response) error {
 	if resp == nil {
 		return nil
@@ -148,7 +149,7 @@ func parseRetryAfter(raw string) (time.Duration, error) {
 		}
 		return d, nil
 	}
-	return 0, fmt.Errorf("invalid Retry-After %q: %w", raw, stderrors.Join(atoiErr, parseErr))
+	return 0, fmt.Errorf("invalid Retry-After %q: %w", raw, errors.Join(atoiErr, parseErr))
 }
 
 // jitteredBackoff returns the wait duration before the next retry.
