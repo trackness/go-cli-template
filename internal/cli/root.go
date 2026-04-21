@@ -136,9 +136,7 @@ func NewRoot(bi BuildInfo, stdout, stderr io.Writer) *cobra.Command {
 			c.SetContext(context.WithValue(c.Context(), depsKey{}, deps))
 			return nil
 		},
-		RunE: func(c *cobra.Command, _ []string) error {
-			return subcommandRequiredError(c.CommandPath())
-		},
+		RunE: subcommandRequiredRunE,
 	}
 	// Route cobra's help and usage to stderr; stdout is reserved for
 	// command output. SetErr is explicit so writeErrorAndExit can read
@@ -440,6 +438,13 @@ func subcommandRequiredError(path string) *output.Error {
 	}
 }
 
+// subcommandRequiredRunE is the shared RunE for any command group —
+// root, `config`, and any future non-leaf command. Consolidates what
+// would otherwise be three inline closures with the same body.
+func subcommandRequiredRunE(c *cobra.Command, _ []string) error {
+	return subcommandRequiredError(c.CommandPath())
+}
+
 // newGroupCommand constructs a cobra.Command for a command group — a
 // non-leaf command that exists only to hold subcommands. Bare
 // invocation of the group errors with SUBCOMMAND_REQUIRED rather than
@@ -448,9 +453,7 @@ func newGroupCommand(use, short string) *cobra.Command {
 	return &cobra.Command{
 		Use:   use,
 		Short: short,
-		RunE: func(c *cobra.Command, _ []string) error {
-			return subcommandRequiredError(c.CommandPath())
-		},
+		RunE:  subcommandRequiredRunE,
 	}
 }
 
@@ -467,14 +470,17 @@ func writeErrorAndExit(cmd *cobra.Command, err error) output.ExitCode {
 	// Cobra surfaces "unknown flag" and "unknown command" as plain
 	// errors without typed sentinels. Map them to stable codes by
 	// message prefix before rendering so skills branch on a code rather
-	// than reading prose.
-	if mapped := mapCobraNativeError(err); mapped != nil {
-		err = mapped
+	// than reading prose. Skip the mapping when err is already
+	// structured — the mapper assumes an unstructured input.
+	var oe *output.Error
+	if !errors.As(err, &oe) {
+		if mapped := mapCobraNativeError(err); mapped != nil {
+			err = mapped
+		}
 	}
 
 	output.WriteError(cmd.ErrOrStderr(), mode, err)
 
-	var oe *output.Error
 	if errors.As(err, &oe) {
 		return oe.ExitCode
 	}
@@ -482,13 +488,10 @@ func writeErrorAndExit(cmd *cobra.Command, err error) output.ExitCode {
 }
 
 // mapCobraNativeError matches cobra's unstructured flag/command errors
-// by message prefix and wraps them in *output.Error with a stable code.
-// Returns nil when err is already structured or does not match.
+// by message prefix and wraps them in *output.Error with a stable
+// code. Returns nil when no prefix matches. Caller (writeErrorAndExit)
+// guarantees err is not already a *output.Error.
 func mapCobraNativeError(err error) *output.Error {
-	var oe *output.Error
-	if errors.As(err, &oe) {
-		return nil
-	}
 	msg := err.Error()
 	switch {
 	case strings.HasPrefix(msg, "unknown flag:"),
