@@ -103,6 +103,47 @@ func TestMutationGuard_WithDryRun_Proceeds(t *testing.T) {
 	}
 }
 
+func TestRunCmdTree_PanicRecovered_StructuredEnvelope(t *testing.T) {
+	// depsFromContext panics when called without PersistentPreRunE
+	// having populated Deps — an invariant violation. A panic should
+	// surface as the structured envelope skills branch on, not as a
+	// Go stack trace on stderr.
+	sterilizeEnv(t)
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(BuildInfo{Version: "test-v0.0.0"}, &stdout, &stderr)
+	cmd.AddCommand(&cobra.Command{
+		Use: "test-panic",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			panic("synthetic invariant violation")
+		},
+	})
+
+	code := runCmdTree(context.Background(), cmd, []string{"test-panic"})
+
+	if code != output.ExitUserError {
+		t.Errorf("exit code = %d, want %d (stderr=%q)", code, output.ExitUserError, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout non-empty: %q", stdout.String())
+	}
+	var env struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(stderr.Bytes(), &env); err != nil {
+		t.Fatalf("stderr is not the structured envelope (likely a raw stack trace): %v; stderr=%q", err, stderr.String())
+	}
+	if env.Error.Code != output.ErrCodeUnknown {
+		t.Errorf("error.code = %q, want %q", env.Error.Code, output.ErrCodeUnknown)
+	}
+	if !strings.Contains(env.Error.Message, "synthetic invariant violation") {
+		t.Errorf("error.message = %q, want to contain panic value", env.Error.Message)
+	}
+}
+
 func TestMutationGuard_UnannotatedCommand_Proceeds(t *testing.T) {
 	// Without the annotation, version must run regardless of
 	// --yes/--dry-run. The guard must only fire for opted-in commands.

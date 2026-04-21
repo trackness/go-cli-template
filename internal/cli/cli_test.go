@@ -200,9 +200,17 @@ func TestRun_Env_OutputMode_Backfills(t *testing.T) {
 	}
 }
 
-func TestRun_Env_LogLevel_KeyUsesDashes(t *testing.T) {
+func TestRun_ConfigView_FiltersCLIOnlyKeys(t *testing.T) {
+	// CLI-layer flags (--output, --log-level, --timeout, --config,
+	// --yes, --dry-run, --no-retry) control the CLI, not the target
+	// system. config view is meant to show target config; CLI-layer
+	// keys would duplicate what's already visible elsewhere (e.g.
+	// ConfigPath) and pollute the Values namespace descendants
+	// populate with target-specific keys.
 	isolatedEnv(t)
 	t.Setenv("GO_CLI_TEMPLATE_LOG_LEVEL", "debug")
+	t.Setenv("GO_CLI_TEMPLATE_OUTPUT", "json")
+	t.Setenv("GO_CLI_TEMPLATE_YES", "true")
 
 	var stdout, stderr bytes.Buffer
 	code := cli.Run(
@@ -226,15 +234,10 @@ func TestRun_Env_LogLevel_KeyUsesDashes(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; stdout=%q", err, stdout.String())
 	}
-	v, ok := got.Values["log-level"]
-	if !ok {
-		t.Errorf("values[%q] missing; keys present: %v", "log-level", got.Values)
-	}
-	if v.Value != "debug" {
-		t.Errorf("values[log-level].value = %v, want %q", v.Value, "debug")
-	}
-	if v.Source != "env" {
-		t.Errorf("values[log-level].source = %q, want %q", v.Source, "env")
+	for _, cliKey := range []string{"output", "log-level", "timeout", "config", "yes", "dry-run", "no-retry"} {
+		if _, present := got.Values[cliKey]; present {
+			t.Errorf("values[%q] must not appear in config view (CLI-layer key); got keys %v", cliKey, got.Values)
+		}
 	}
 }
 

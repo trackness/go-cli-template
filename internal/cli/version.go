@@ -13,9 +13,10 @@ import (
 // has been made during this invocation — the target system's reported
 // version. The template does not populate Target; per-repo code that
 // wraps a real target should populate it on its first successful call.
+// Empty strings are omitted from the JSON; no need for a pointer.
 type VersionOutput struct {
 	CLI    BuildInfo `json:"cli"`
-	Target *string   `json:"target,omitempty"`
+	Target string    `json:"target,omitempty"`
 }
 
 func newVersionCommand() *cobra.Command {

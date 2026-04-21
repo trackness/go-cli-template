@@ -118,7 +118,23 @@ func Run(ctx context.Context, bi BuildInfo, args []string, stdout, stderr io.Wri
 // Execute and still exercise the full error-rendering path. Any
 // context.WithTimeout wrap installed by PersistentPreRunE is released
 // via deps.cancelTimeout after Execute returns.
-func runCmdTree(ctx context.Context, cmd *cobra.Command, args []string) output.ExitCode {
+//
+// A deferred recover catches panics from invariant violations (the
+// canonical case is depsFromContext with a PersistentPreRunE-less
+// context) and renders them as the structured envelope skills branch
+// on, rather than a Go stack trace.
+func runCmdTree(ctx context.Context, cmd *cobra.Command, args []string) (code output.ExitCode) {
+	defer func() {
+		if r := recover(); r != nil {
+			err := &output.Error{
+				Code:     output.ErrCodeUnknown,
+				Message:  fmt.Sprintf("internal invariant violated: %v", r),
+				ExitCode: output.ExitUserError,
+			}
+			output.WriteError(cmd.ErrOrStderr(), resolveErrorMode(cmd), err)
+			code = output.ExitUserError
+		}
+	}()
 	cmd.SetArgs(args)
 	cmd.SetContext(ctx)
 	err := cmd.Execute()
