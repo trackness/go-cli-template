@@ -251,6 +251,117 @@ func TestRun_Env_InvalidTimeout_Errors(t *testing.T) {
 	}
 }
 
+func TestRun_FlagBeatsEnv_OutputMode(t *testing.T) {
+	// Flag > env per CLAUDE.md "Configuration". backfillFlags must only
+	// overwrite the pflag value when pfs.Changed(name) is false.
+	isolatedEnv(t)
+	t.Setenv("GO_CLI_TEMPLATE_OUTPUT", "human")
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{"--output", "json", "version"},
+		&stdout,
+		&stderr,
+	)
+
+	if code != output.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d (stderr=%q)", code, output.ExitSuccess, stderr.String())
+	}
+	got := stdout.String()
+	// JSON output starts with `{`; human output starts with CLI name.
+	if !strings.HasPrefix(got, "{") {
+		t.Errorf("flag --output json did not win over env OUTPUT=human: stdout=%q", got)
+	}
+}
+
+func TestRun_HumanMode_ErrorIsPlainText(t *testing.T) {
+	// Human-mode errors must render as plain "Error: <message>" on
+	// stderr, never JSON. This path is the contract's human-mode
+	// counterpart to the JSON envelope.
+	isolatedEnv(t)
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{"--output", "human"},
+		&stdout,
+		&stderr,
+	)
+
+	if code != output.ExitUserError {
+		t.Fatalf("exit code = %d, want %d (stderr=%q)", code, output.ExitUserError, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout non-empty: %q", stdout.String())
+	}
+	got := stderr.String()
+	if !strings.HasPrefix(got, "Error: ") {
+		t.Errorf("human-mode stderr %q does not start with %q", got, "Error: ")
+	}
+	if strings.Contains(got, `"code"`) {
+		t.Errorf("human mode leaked JSON: %q", got)
+	}
+}
+
+func TestRun_ErrorEnvelope_StrictStructure(t *testing.T) {
+	// Envelope shape is a versioned contract surface. Top level has
+	// exactly one key ("error"); body has code, message, and optional
+	// details (omitted when empty). A regression adding a timestamp or
+	// request-id sibling at top level would slip past tests that parse
+	// into a typed struct — this test uses RawMessage to guard it.
+	isolatedEnv(t)
+
+	var stdout, stderr bytes.Buffer
+	_ = cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{},
+		&stdout,
+		&stderr,
+	)
+
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(stderr.Bytes(), &top); err != nil {
+		t.Fatalf("unmarshal top: %v; stderr=%q", err, stderr.String())
+	}
+	if len(top) != 1 {
+		t.Errorf("envelope has %d top-level keys, want 1; keys=%v", len(top), keysOf(top))
+	}
+	if _, ok := top["error"]; !ok {
+		t.Errorf("envelope missing %q key; keys=%v", "error", keysOf(top))
+	}
+
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(top["error"], &body); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	for _, required := range []string{"code", "message"} {
+		if _, ok := body[required]; !ok {
+			t.Errorf("body missing required key %q; keys=%v", required, keysOf(body))
+		}
+	}
+	// details must be omitted when empty (SUBCOMMAND_REQUIRED has no details)
+	if _, ok := body["details"]; ok {
+		t.Errorf("body contains %q but SUBCOMMAND_REQUIRED sets no details", "details")
+	}
+	for k := range body {
+		if k != "code" && k != "message" && k != "details" {
+			t.Errorf("body contains unexpected key %q", k)
+		}
+	}
+}
+
+func keysOf(m map[string]json.RawMessage) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
 func TestRun_UnknownFlag_EnvOutputMode_RendersHuman(t *testing.T) {
 	// Pre-parse errors (unknown flag) never reach PersistentPreRunE, so
 	// backfillFlags doesn't run. writeErrorAndExit must still respect
