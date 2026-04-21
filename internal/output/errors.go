@@ -42,6 +42,7 @@ const (
 	ErrCodeInvalidOutputMode       = "INVALID_OUTPUT_MODE"
 	ErrCodeMalformedConfigFile     = "MALFORMED_CONFIG_FILE"
 	ErrCodeMissingRequiredValue    = "MISSING_REQUIRED_VALUE"
+	ErrCodeRetryAfterTooLong       = "RETRY_AFTER_TOO_LONG"
 	ErrCodeSubcommandRequired      = "SUBCOMMAND_REQUIRED"
 	ErrCodeUnknown                 = "UNKNOWN"
 	ErrCodeUnknownCommand          = "UNKNOWN_COMMAND"

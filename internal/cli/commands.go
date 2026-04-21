@@ -142,6 +142,7 @@ func errorCodeList() []string {
 		output.ErrCodeInvalidOutputMode,
 		output.ErrCodeMalformedConfigFile,
 		output.ErrCodeMissingRequiredValue,
+		output.ErrCodeRetryAfterTooLong,
 		output.ErrCodeSubcommandRequired,
 		output.ErrCodeUnknown,
 		output.ErrCodeUnknownCommand,

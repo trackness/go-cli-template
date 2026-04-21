@@ -65,6 +65,7 @@ type Flags struct {
 	ConfigPath string
 	Yes        bool
 	DryRun     bool
+	NoRetry    bool
 
 	configPath   string
 	configSource string
@@ -83,6 +84,12 @@ type Deps struct {
 	Config *ConfigLayers
 	Stdout io.Writer
 	Stderr io.Writer
+
+	// cancelTimeout is the cancel func for the context.WithTimeout
+	// wrap applied in PersistentPreRunE so runCmdTree can release the
+	// timer on exit. Not exported — callers shouldn't cancel
+	// prematurely from command code.
+	cancelTimeout context.CancelFunc
 }
 
 // ConfigLayers holds each source's koanf instance separately so that
@@ -108,11 +115,17 @@ func Run(ctx context.Context, bi BuildInfo, args []string, stdout, stderr io.Wri
 // runCmdTree executes cmd against args and routes any error through
 // writeErrorAndExit — the same pipeline Run uses. Extracted so
 // internal tests can inject extra subcommands into the tree before
-// Execute and still exercise the full error-rendering path.
+// Execute and still exercise the full error-rendering path. Any
+// context.WithTimeout wrap installed by PersistentPreRunE is released
+// via deps.cancelTimeout after Execute returns.
 func runCmdTree(ctx context.Context, cmd *cobra.Command, args []string) output.ExitCode {
 	cmd.SetArgs(args)
 	cmd.SetContext(ctx)
-	if err := cmd.Execute(); err != nil {
+	err := cmd.Execute()
+	if d, ok := cmd.Context().Value(depsKey{}).(*Deps); ok && d.cancelTimeout != nil {
+		d.cancelTimeout()
+	}
+	if err != nil {
 		return writeErrorAndExit(cmd, err)
 	}
 	return output.ExitSuccess
@@ -155,7 +168,13 @@ func NewRoot(bi BuildInfo, stdout, stderr io.Writer) *cobra.Command {
 				}
 			}
 
-			c.SetContext(context.WithValue(c.Context(), depsKey{}, deps))
+			// Bound the total retry window by wrapping the command
+			// context with --timeout. When this fires, resty's retry
+			// loop observes ctx.Err() and stops. runCmdTree calls
+			// deps.cancelTimeout after Execute returns.
+			ctx, cancel := context.WithTimeout(c.Context(), deps.Flags.Timeout)
+			deps.cancelTimeout = cancel
+			c.SetContext(context.WithValue(ctx, depsKey{}, deps))
 			return nil
 		},
 		RunE: subcommandRequiredRunE,
@@ -182,6 +201,7 @@ func registerPersistentFlags(cmd *cobra.Command, f *Flags) {
 	fs.StringVar(&f.ConfigPath, "config", "", "config file path; unset auto-discovers, empty disables file loading")
 	fs.BoolVar(&f.Yes, "yes", false, "assume yes for confirmations; required for mutating commands")
 	fs.BoolVar(&f.DryRun, "dry-run", false, "dry-run: mutating commands do not mutate")
+	fs.BoolVar(&f.NoRetry, "no-retry", false, "disable automatic retry of transient GET/HEAD failures")
 }
 
 // depsFromContext retrieves Deps populated by PersistentPreRunE.
@@ -240,10 +260,14 @@ func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
 	r := resty.NewWithClient(httpClient).
 		SetHeader("User-Agent", fmt.Sprintf("%s/%s", cliName, bi.Version)).
 		SetRetryCount(2).
-		SetRetryWaitTime(100 * time.Millisecond).
-		SetRetryMaxWaitTime(5 * time.Second).
+		SetRetryWaitTime(retryBaseWait).
+		SetRetryMaxWaitTime(retryMaxWait).
 		AddRetryCondition(retryCondition).
+		SetRetryAfter(retryAfter).
 		SetLogger(&slogRestyLogger{Logger: logger})
+	if f.NoRetry {
+		r.SetRetryCount(0)
+	}
 	if level == slog.LevelDebug {
 		r.EnableGenerateCurlOnDebug()
 	}
@@ -301,31 +325,10 @@ func backfillFlags(f *Flags, pfs *pflag.FlagSet, merged *koanf.Koanf) error {
 	if !pfs.Changed("dry-run") && merged.Exists("dry-run") {
 		f.DryRun = merged.Bool("dry-run")
 	}
+	if !pfs.Changed("no-retry") && merged.Exists("no-retry") {
+		f.NoRetry = merged.Bool("no-retry")
+	}
 	return nil
-}
-
-// retryCondition enforces the contract-mandated retry policy: GET and
-// HEAD only; status 429/502/503/504 or transport error. PUT, POST,
-// DELETE, and PATCH are never auto-retried — the skill decides.
-func retryCondition(resp *resty.Response, err error) bool {
-	if resp == nil {
-		return err != nil
-	}
-	req := resp.Request
-	if req == nil {
-		return false
-	}
-	if req.Method != http.MethodGet && req.Method != http.MethodHead {
-		return false
-	}
-	switch resp.StatusCode() {
-	case http.StatusTooManyRequests,
-		http.StatusBadGateway,
-		http.StatusServiceUnavailable,
-		http.StatusGatewayTimeout:
-		return true
-	}
-	return false
 }
 
 // loadConfig assembles the per-source koanf instances plus their merged
