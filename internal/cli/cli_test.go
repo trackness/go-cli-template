@@ -251,6 +251,38 @@ func TestRun_Env_InvalidTimeout_Errors(t *testing.T) {
 	}
 }
 
+func TestRun_UnknownFlag_EnvOutputMode_RendersHuman(t *testing.T) {
+	// Pre-parse errors (unknown flag) never reach PersistentPreRunE, so
+	// backfillFlags doesn't run. writeErrorAndExit must still respect
+	// the env-only human-mode request — otherwise env-configured skills
+	// see JSON envelopes for exactly the errors they most need to read.
+	isolatedEnv(t)
+	t.Setenv("GO_CLI_TEMPLATE_OUTPUT", "human")
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{"--foo"},
+		&stdout,
+		&stderr,
+	)
+
+	if code != output.ExitUserError {
+		t.Fatalf("exit code = %d, want %d (stderr=%q)", code, output.ExitUserError, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout non-empty: %q", stdout.String())
+	}
+	got := stderr.String()
+	if !strings.HasPrefix(got, "Error: ") {
+		t.Errorf("expected human-mode prefix %q, got %q", "Error: ", got)
+	}
+	if strings.Contains(got, `"code"`) {
+		t.Errorf("human mode leaked JSON: %q", got)
+	}
+}
+
 func TestRun_Commands_Groups_HumanOutputFalse(t *testing.T) {
 	isolatedEnv(t)
 

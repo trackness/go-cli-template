@@ -462,10 +462,7 @@ func newGroupCommand(use, short string) *cobra.Command {
 // effort mode detection: if the --output flag has been parsed, use its
 // value; otherwise fall back to JSON (skills never assume human).
 func writeErrorAndExit(cmd *cobra.Command, err error) output.ExitCode {
-	mode := "json"
-	if f := cmd.Root().PersistentFlags().Lookup("output"); f != nil {
-		mode = f.Value.String()
-	}
+	mode := resolveErrorMode(cmd)
 
 	// Cobra surfaces "unknown flag" and "unknown command" as plain
 	// errors without typed sentinels. Map them to stable codes by
@@ -485,6 +482,21 @@ func writeErrorAndExit(cmd *cobra.Command, err error) output.ExitCode {
 		return oe.ExitCode
 	}
 	return output.ExitUserError
+}
+
+// resolveErrorMode picks the output mode to render an error with when
+// writeErrorAndExit is invoked. Precedence matches the resolved config
+// precedence (flag > env > default) but avoids touching Deps because
+// PersistentPreRunE may not have run (e.g. pflag parse failed before
+// buildDeps could resolve anything).
+func resolveErrorMode(cmd *cobra.Command) string {
+	if f := cmd.Root().PersistentFlags().Lookup("output"); f != nil && f.Changed {
+		return f.Value.String()
+	}
+	if v := os.Getenv(envVarPrefix + "OUTPUT"); v == "json" || v == "human" {
+		return v
+	}
+	return "json"
 }
 
 // mapCobraNativeError matches cobra's unstructured flag/command errors
