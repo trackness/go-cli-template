@@ -440,7 +440,7 @@ func subcommandRequiredError(path string) *output.Error {
 
 // subcommandRequiredRunE is the shared RunE for any command group —
 // root, `config`, and any future non-leaf command. Consolidates what
-// would otherwise be three inline closures with the same body.
+// would otherwise be two inline closures with the same body.
 func subcommandRequiredRunE(c *cobra.Command, _ []string) error {
 	return subcommandRequiredError(c.CommandPath())
 }
@@ -488,10 +488,14 @@ func writeErrorAndExit(cmd *cobra.Command, err error) output.ExitCode {
 // writeErrorAndExit is invoked. Precedence matches the resolved config
 // precedence (flag > env > default) but avoids touching Deps because
 // PersistentPreRunE may not have run (e.g. pflag parse failed before
-// buildDeps could resolve anything).
+// buildDeps could resolve anything). Values other than json or human
+// from either source fall through to json — invalid user input never
+// dictates error rendering.
 func resolveErrorMode(cmd *cobra.Command) string {
 	if f := cmd.Root().PersistentFlags().Lookup("output"); f != nil && f.Changed {
-		return f.Value.String()
+		if v := f.Value.String(); v == "json" || v == "human" {
+			return v
+		}
 	}
 	if v := os.Getenv(envVarPrefix + "OUTPUT"); v == "json" || v == "human" {
 		return v

@@ -276,10 +276,19 @@ func TestRun_FlagBeatsEnv_OutputMode(t *testing.T) {
 	if code != output.ExitSuccess {
 		t.Fatalf("exit code = %d, want %d (stderr=%q)", code, output.ExitSuccess, stderr.String())
 	}
-	got := stdout.String()
-	// JSON output starts with `{`; human output starts with CLI name.
-	if !strings.HasPrefix(got, "{") {
-		t.Errorf("flag --output json did not win over env OUTPUT=human: stdout=%q", got)
+	// JSON mode produces a parseable envelope with cli.version populated;
+	// human mode emits plain text that won't unmarshal. The dual check
+	// (parses AND field populated) beats a HasPrefix("{") coincidence.
+	var parsed struct {
+		CLI struct {
+			Version string `json:"version"`
+		} `json:"cli"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
+		t.Fatalf("flag --output json did not win over env OUTPUT=human: stdout=%q not JSON: %v", stdout.String(), err)
+	}
+	if parsed.CLI.Version != "test-v0.0.0" {
+		t.Errorf("cli.version = %q, want %q", parsed.CLI.Version, "test-v0.0.0")
 	}
 }
 
@@ -322,13 +331,20 @@ func TestRun_ErrorEnvelope_StrictStructure(t *testing.T) {
 	isolatedEnv(t)
 
 	var stdout, stderr bytes.Buffer
-	_ = cli.Run(
+	code := cli.Run(
 		context.Background(),
 		cli.BuildInfo{Version: "test-v0.0.0"},
 		[]string{},
 		&stdout,
 		&stderr,
 	)
+
+	if code != output.ExitUserError {
+		t.Errorf("exit code = %d, want %d", code, output.ExitUserError)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout non-empty: %q", stdout.String())
+	}
 
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(stderr.Bytes(), &top); err != nil {
