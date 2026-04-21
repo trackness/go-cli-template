@@ -164,6 +164,67 @@ func TestRun_UnknownCommand_ErrorsUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestRun_Env_OutputMode_Backfills(t *testing.T) {
+	isolatedEnv(t)
+	t.Setenv("GO_CLI_TEMPLATE_OUTPUT", "human")
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{"version"},
+		&stdout,
+		&stderr,
+	)
+
+	if code != output.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d (stderr=%q)", code, output.ExitSuccess, stderr.String())
+	}
+	// Human-mode version prints "<cliName> <version>\n".
+	want := "go-cli-template test-v0.0.0\n"
+	if got := stdout.String(); got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestRun_Env_LogLevel_KeyUsesDashes(t *testing.T) {
+	isolatedEnv(t)
+	t.Setenv("GO_CLI_TEMPLATE_LOG_LEVEL", "debug")
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{"config", "view"},
+		&stdout,
+		&stderr,
+	)
+
+	if code != output.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d (stderr=%q)", code, output.ExitSuccess, stderr.String())
+	}
+
+	var got struct {
+		Values map[string]struct {
+			Value  any    `json:"value"`
+			Source string `json:"source"`
+		} `json:"values"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; stdout=%q", err, stdout.String())
+	}
+	v, ok := got.Values["log-level"]
+	if !ok {
+		t.Errorf("values[%q] missing; keys present: %v", "log-level", got.Values)
+	}
+	if v.Value != "debug" {
+		t.Errorf("values[log-level].value = %v, want %q", v.Value, "debug")
+	}
+	if v.Source != "env" {
+		t.Errorf("values[log-level].source = %q, want %q", v.Source, "env")
+	}
+}
+
 func TestRun_Version_JSONMode_Succeeds(t *testing.T) {
 	isolatedEnv(t)
 

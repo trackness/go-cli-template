@@ -176,9 +176,21 @@ func depsFromContext(ctx context.Context) *Deps {
 }
 
 func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
-	// Output mode must be one of the contract-declared values. Enforce
-	// before any work so an unsupported mode fails fast with a stable
-	// error code rather than silently falling through to default JSON.
+	// 1. Load config layers (precedence: flag > env > file > default).
+	layers, err := loadConfig(f, pfs)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Backfill *Flags fields from the merged layers when pflag did
+	//    not explicitly set them. Realises the documented precedence on
+	//    the struct commands read from. --config itself is not
+	//    backfilled (resolveConfigPath already consumed it).
+	backfillFlags(f, pfs, layers.Merged)
+
+	// 3. Validate --output on the final resolved value. An unsupported
+	//    mode fails fast with a stable code rather than silently
+	//    falling through to default JSON.
 	if f.Output != "json" && f.Output != "human" {
 		return nil, &output.Error{
 			Code:     output.ErrCodeInvalidOutputMode,
@@ -187,8 +199,8 @@ func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
 		}
 	}
 
-	// Logger — slog text handler to stderr. All logs go to stderr
-	// regardless of output mode; stdout is reserved for command output.
+	// 4. Logger — slog text handler to stderr. All logs go to stderr
+	//    regardless of output mode; stdout is reserved for command output.
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(f.LogLevel)); err != nil {
 		return nil, &output.Error{
@@ -200,8 +212,8 @@ func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	// HTTP + resty. Explicit *http.Client, per CLAUDE.md "HTTP client":
-	// never resty.New() with defaults.
+	// 5. HTTP + resty. Explicit *http.Client, per CLAUDE.md "HTTP client":
+	//    never resty.New() with defaults.
 	httpClient := &http.Client{Timeout: f.Timeout}
 	r := resty.NewWithClient(httpClient).
 		SetHeader("User-Agent", fmt.Sprintf("%s/%s", cliName, bi.Version)).
@@ -213,12 +225,6 @@ func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
 		r.EnableGenerateCurlOnDebug()
 	}
 
-	// Config layers (precedence: flag > env > file > default).
-	layers, err := loadConfig(f, pfs)
-	if err != nil {
-		return nil, err
-	}
-
 	return &Deps{
 		Flags:  f,
 		Build:  bi,
@@ -227,6 +233,42 @@ func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
 		Resty:  r,
 		Config: layers,
 	}, nil
+}
+
+// backfillFlags copies resolved values from the merged config layers
+// onto f for any flag the user did not explicitly set on the command
+// line. Empty string values in the merged layers are treated as
+// "unset" — so an env var like GO_CLI_TEMPLATE_OUTPUT="" does not
+// clobber a pflag default. --config is deliberately skipped because
+// resolveConfigPath already consumed it.
+func backfillFlags(f *Flags, pfs *pflag.FlagSet, merged *koanf.Koanf) {
+	if !pfs.Changed("output") {
+		if v := merged.String("output"); v != "" {
+			f.Output = v
+		}
+	}
+	if !pfs.Changed("log-level") {
+		if v := merged.String("log-level"); v != "" {
+			f.LogLevel = v
+		}
+	}
+	if !pfs.Changed("timeout") {
+		if v := merged.String("timeout"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				f.Timeout = d
+			}
+		}
+	}
+	if !pfs.Changed("yes") {
+		if v := merged.String("yes"); v != "" {
+			f.Yes = merged.Bool("yes")
+		}
+	}
+	if !pfs.Changed("dry-run") {
+		if v := merged.String("dry-run"); v != "" {
+			f.DryRun = merged.Bool("dry-run")
+		}
+	}
 }
 
 // retryCondition enforces the contract-mandated retry policy: GET and
@@ -315,10 +357,21 @@ func loadConfig(f *Flags, pfs *pflag.FlagSet) (*ConfigLayers, error) {
 	}, nil
 }
 
-// envKeyTransform maps GO_CLI_TEMPLATE_FOO_BAR → foo.bar.
+// envKeyTransform maps GO_CLI_TEMPLATE_FOO_BAR → foo-bar. Keys are
+// flat with dashes to align with pflag's posflag provider: the env and
+// flag layers then share a single namespace so merge precedence works.
+// Nested-config env mapping is deliberately out of scope; descendant
+// repos that need it add their own mapper.
+//
+// Empty values are skipped (returning an empty key tells the koanf env
+// provider to drop the entry). This treats `VAR=""` as "unset" so an
+// exported-but-blank env var does not clobber a pflag default.
 func envKeyTransform(k, v string) (string, any) {
+	if v == "" {
+		return "", nil
+	}
 	k = strings.TrimPrefix(k, envVarPrefix)
-	return strings.ReplaceAll(strings.ToLower(k), "_", "."), v
+	return strings.ReplaceAll(strings.ToLower(k), "_", "-"), v
 }
 
 // resolveConfigPath applies the discovery rule from CLAUDE.md. The
