@@ -43,6 +43,7 @@ const (
 	ErrCodeMissingRequiredValue    = "MISSING_REQUIRED_VALUE"
 	ErrCodeSubcommandRequired      = "SUBCOMMAND_REQUIRED"
 	ErrCodeUnknown                 = "UNKNOWN"
+	ErrCodeUnknownCommand          = "UNKNOWN_COMMAND"
 )
 
 // Envelope is the JSON shape of an error written to stderr in default

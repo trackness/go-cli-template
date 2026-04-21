@@ -116,6 +116,54 @@ func TestRun_InvalidOutputMode_Errors(t *testing.T) {
 	}
 }
 
+func TestRun_UnknownFlag_ErrorsInvalidFlag(t *testing.T) {
+	isolatedEnv(t)
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{"--foo"},
+		&stdout,
+		&stderr,
+	)
+
+	if code != output.ExitUserError {
+		t.Errorf("exit code = %d, want %d (stderr=%q)", code, output.ExitUserError, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout non-empty: %q", stdout.String())
+	}
+	env := parseErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != output.ErrCodeInvalidFlag {
+		t.Errorf("error.code = %q, want %q", env.Error.Code, output.ErrCodeInvalidFlag)
+	}
+}
+
+func TestRun_UnknownCommand_ErrorsUnknownCommand(t *testing.T) {
+	isolatedEnv(t)
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{"nonexistent-subcommand"},
+		&stdout,
+		&stderr,
+	)
+
+	if code != output.ExitUserError {
+		t.Errorf("exit code = %d, want %d (stderr=%q)", code, output.ExitUserError, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout non-empty: %q", stdout.String())
+	}
+	env := parseErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != output.ErrCodeUnknownCommand {
+		t.Errorf("error.code = %q, want %q", env.Error.Code, output.ErrCodeUnknownCommand)
+	}
+}
+
 func TestRun_Version_JSONMode_Succeeds(t *testing.T) {
 	isolatedEnv(t)
 

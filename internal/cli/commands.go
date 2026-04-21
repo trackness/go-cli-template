@@ -140,5 +140,6 @@ func errorCodeList() []string {
 		output.ErrCodeMissingRequiredValue,
 		output.ErrCodeSubcommandRequired,
 		output.ErrCodeUnknown,
+		output.ErrCodeUnknownCommand,
 	}
 }

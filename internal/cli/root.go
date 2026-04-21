@@ -398,6 +398,15 @@ func writeErrorAndExit(cmd *cobra.Command, err error) output.ExitCode {
 	if f := cmd.Root().PersistentFlags().Lookup("output"); f != nil {
 		mode = f.Value.String()
 	}
+
+	// Cobra surfaces "unknown flag" and "unknown command" as plain
+	// errors without typed sentinels. Map them to stable codes by
+	// message prefix before rendering so skills branch on a code rather
+	// than reading prose.
+	if mapped := mapCobraNativeError(err); mapped != nil {
+		err = mapped
+	}
+
 	output.WriteError(cmd.ErrOrStderr(), mode, err)
 
 	var oe *output.Error
@@ -405,4 +414,32 @@ func writeErrorAndExit(cmd *cobra.Command, err error) output.ExitCode {
 		return oe.ExitCode
 	}
 	return output.ExitUserError
+}
+
+// mapCobraNativeError matches cobra's unstructured flag/command errors
+// by message prefix and wraps them in *output.Error with a stable code.
+// Returns nil when err is already structured or does not match.
+func mapCobraNativeError(err error) *output.Error {
+	var oe *output.Error
+	if errors.As(err, &oe) {
+		return nil
+	}
+	msg := err.Error()
+	switch {
+	case strings.HasPrefix(msg, "unknown flag:"),
+		strings.HasPrefix(msg, "unknown shorthand flag:"),
+		strings.HasPrefix(msg, "flag provided but not defined:"):
+		return &output.Error{
+			Code:     output.ErrCodeInvalidFlag,
+			Message:  msg,
+			ExitCode: output.ExitUserError,
+		}
+	case strings.HasPrefix(msg, "unknown command"):
+		return &output.Error{
+			Code:     output.ErrCodeUnknownCommand,
+			Message:  msg,
+			ExitCode: output.ExitUserError,
+		}
+	}
+	return nil
 }
