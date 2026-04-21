@@ -201,16 +201,23 @@ func TestRun_Env_OutputMode_Backfills(t *testing.T) {
 }
 
 func TestRun_ConfigView_FiltersCLIOnlyKeys(t *testing.T) {
-	// CLI-layer flags (--output, --log-level, --timeout, --config,
-	// --yes, --dry-run, --no-retry) control the CLI, not the target
-	// system. config view is meant to show target config; CLI-layer
-	// keys would duplicate what's already visible elsewhere (e.g.
-	// ConfigPath) and pollute the Values namespace descendants
-	// populate with target-specific keys.
+	// Two claims at once:
+	//   1. CLI-layer flags (--output, --log-level, --timeout,
+	//      --config, --yes, --dry-run, --no-retry) are filtered out
+	//      of config view's Values map.
+	//   2. Non-CLI env keys pass through with the flat-dash
+	//      transform — GO_CLI_TEMPLATE_CUSTOM_THING lands at
+	//      "custom-thing" (not "custom.thing"), exercising B2's
+	//      transform. Name deliberately avoids sensitive suffixes
+	//      (-key, -token, -secret, -password) so the redaction layer
+	//      doesn't confound the assertion. Without this second claim
+	//      a regression to dots would silently escape the filter
+	//      test.
 	isolatedEnv(t)
 	t.Setenv("GO_CLI_TEMPLATE_LOG_LEVEL", "debug")
 	t.Setenv("GO_CLI_TEMPLATE_OUTPUT", "json")
 	t.Setenv("GO_CLI_TEMPLATE_YES", "true")
+	t.Setenv("GO_CLI_TEMPLATE_CUSTOM_THING", "42")
 
 	var stdout, stderr bytes.Buffer
 	code := cli.Run(
@@ -238,6 +245,12 @@ func TestRun_ConfigView_FiltersCLIOnlyKeys(t *testing.T) {
 		if _, present := got.Values[cliKey]; present {
 			t.Errorf("values[%q] must not appear in config view (CLI-layer key); got keys %v", cliKey, got.Values)
 		}
+	}
+	custom, ok := got.Values["custom-thing"]
+	if !ok {
+		t.Errorf("values[%q] missing; env key transform regressed? got keys %v", "custom-thing", got.Values)
+	} else if custom.Value != "42" || custom.Source != "env" {
+		t.Errorf("values[custom-thing] = %+v, want {Value: \"42\", Source: \"env\"}", custom)
 	}
 }
 

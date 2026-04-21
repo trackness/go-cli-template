@@ -134,14 +134,16 @@ func runCmdTree(ctx context.Context, cmd *cobra.Command, args []string) (code ou
 			output.WriteError(cmd.ErrOrStderr(), resolveErrorMode(cmd), err)
 			code = output.ExitUserError
 		}
+		// Release any context.WithTimeout installed by
+		// PersistentPreRunE regardless of happy- or panic-path.
+		// Skips cleanly when deps was never populated (panic pre-PPR).
+		if d, ok := cmd.Context().Value(depsKey{}).(*Deps); ok && d.cancelTimeout != nil {
+			d.cancelTimeout()
+		}
 	}()
 	cmd.SetArgs(args)
 	cmd.SetContext(ctx)
-	err := cmd.Execute()
-	if d, ok := cmd.Context().Value(depsKey{}).(*Deps); ok && d.cancelTimeout != nil {
-		d.cancelTimeout()
-	}
-	if err != nil {
+	if err := cmd.Execute(); err != nil {
 		return writeErrorAndExit(cmd, err)
 	}
 	return output.ExitSuccess

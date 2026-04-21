@@ -8,6 +8,7 @@ package testutil
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"testing"
 )
 
@@ -25,13 +26,13 @@ import (
 //	    },
 //	    "POST /items": createItemHandler(t),
 //	}))
-func Dispatch(t *testing.T, routes map[string]http.HandlerFunc) http.HandlerFunc {
+func Dispatch(t testing.TB, routes map[string]http.HandlerFunc) http.HandlerFunc {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
 		key := fmt.Sprintf("%s %s", r.Method, r.URL.Path)
 		h, ok := routes[key]
 		if !ok {
-			t.Errorf("unexpected request: %s (known routes: %v)", key, keys(routes))
+			t.Errorf("unexpected request: %s (known routes: %v)", key, sortedKeys(routes))
 			http.NotFound(w, r)
 			return
 		}
@@ -39,10 +40,11 @@ func Dispatch(t *testing.T, routes map[string]http.HandlerFunc) http.HandlerFunc
 	}
 }
 
-func keys(m map[string]http.HandlerFunc) []string {
+func sortedKeys(m map[string]http.HandlerFunc) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
 	}
+	sort.Strings(out)
 	return out
 }

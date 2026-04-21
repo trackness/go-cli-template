@@ -429,7 +429,7 @@ helper. Its transitive deps (`github.com/mattn/go-isatty`,
 - Every command has a golden JSON fixture in `testdata/` for its
   default-mode output. Commands that implement `-o human` also have a
   golden text fixture. Output changes require a golden update and a
-  CHANGELOG entry.
+  major-version bump.
 - `t.TempDir()` for filesystem work; never `os.TempDir()` directly.
 - Integration tests behind `//go:build integration` with a separate
   `task` target.

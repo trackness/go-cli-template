@@ -6,8 +6,7 @@ import (
 )
 
 // WriteJSON writes v as a single JSON document to w, terminated by a
-// newline. Strict mode: no banners, no ANSI, no trailing prose. NDJSON
-// streams are produced by calling WriteJSON on successive values.
+// newline. Strict mode: no banners, no ANSI, no trailing prose.
 //
 // HTML-escaping is disabled because the consumer is machine-facing and
 // must receive `<`, `>`, and `&` unmangled.
