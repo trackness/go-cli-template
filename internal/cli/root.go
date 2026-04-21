@@ -102,7 +102,14 @@ type depsKey struct{}
 // stderr are threaded through to subcommands via Deps; pass os.Stdout
 // and os.Stderr from main, bytes.Buffer from tests.
 func Run(ctx context.Context, bi BuildInfo, args []string, stdout, stderr io.Writer) output.ExitCode {
-	cmd := NewRoot(bi, stdout, stderr)
+	return runCmdTree(ctx, NewRoot(bi, stdout, stderr), args)
+}
+
+// runCmdTree executes cmd against args and routes any error through
+// writeErrorAndExit — the same pipeline Run uses. Extracted so
+// internal tests can inject extra subcommands into the tree before
+// Execute and still exercise the full error-rendering path.
+func runCmdTree(ctx context.Context, cmd *cobra.Command, args []string) output.ExitCode {
 	cmd.SetArgs(args)
 	cmd.SetContext(ctx)
 	if err := cmd.Execute(); err != nil {

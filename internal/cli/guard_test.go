@@ -3,7 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
-	"errors"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -15,7 +15,7 @@ import (
 
 // sterilizeEnv is the internal-package equivalent of isolatedEnv used
 // by cli_test.go. Duplicated because internal-package tests need it
-// for scenarios that external-package tests cannot cover (constructing
+// for scenarios external-package tests cannot cover (constructing
 // commands with unexported annotation keys).
 func sterilizeEnv(t *testing.T) {
 	t.Helper()
@@ -30,7 +30,7 @@ func sterilizeEnv(t *testing.T) {
 
 // newMutatingCmd builds a throwaway subcommand carrying the mutating
 // annotation. Used to exercise the mutation guard without shipping a
-// mutating command in the template (descendants declare their own).
+// mutating command in the template; descendants declare their own.
 func newMutatingCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "test-mutate",
@@ -42,56 +42,74 @@ func newMutatingCmd() *cobra.Command {
 	}
 }
 
-func runWithMutating(t *testing.T, args []string) error {
+// runWithMutating builds a root command with the mutating subcommand
+// attached, then runs the full pipeline (runCmdTree → writeErrorAndExit
+// on failure). Returns the exit code plus captured stdout/stderr so
+// tests can assert on the stderr envelope the skill consumer sees.
+func runWithMutating(t *testing.T, args []string) (stdout, stderr bytes.Buffer, code output.ExitCode) {
 	t.Helper()
-	var stdout, stderr bytes.Buffer
 	cmd := NewRoot(BuildInfo{Version: "test-v0.0.0"}, &stdout, &stderr)
 	cmd.AddCommand(newMutatingCmd())
-	cmd.SetArgs(args)
-	cmd.SetContext(context.Background())
-	return cmd.Execute()
+	code = runCmdTree(context.Background(), cmd, args)
+	return stdout, stderr, code
 }
 
-func TestMutationGuard_WithoutYesOrDryRun_Errors(t *testing.T) {
+func TestMutationGuard_WithoutYesOrDryRun_EnvelopeAndExitCode(t *testing.T) {
 	sterilizeEnv(t)
 
-	err := runWithMutating(t, []string{"test-mutate"})
-	if err == nil {
-		t.Fatal("Execute returned nil, want *output.Error with CONFIRMATION_REQUIRED")
+	stdout, stderr, code := runWithMutating(t, []string{"test-mutate"})
+
+	if code != output.ExitUserError {
+		t.Errorf("exit code = %d, want %d (stderr=%q)", code, output.ExitUserError, stderr.String())
 	}
-	var oe *output.Error
-	if !errors.As(err, &oe) {
-		t.Fatalf("err is not *output.Error: %v", err)
+	if stdout.Len() != 0 {
+		t.Errorf("stdout non-empty: %q", stdout.String())
 	}
-	if oe.Code != output.ErrCodeConfirmationRequired {
-		t.Errorf("code = %q, want %q", oe.Code, output.ErrCodeConfirmationRequired)
+
+	var env struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
 	}
-	if oe.ExitCode != output.ExitUserError {
-		t.Errorf("exit code = %d, want %d", oe.ExitCode, output.ExitUserError)
+	if err := json.Unmarshal(stderr.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal stderr %q: %v", stderr.String(), err)
+	}
+	if env.Error.Code != output.ErrCodeConfirmationRequired {
+		t.Errorf("error.code = %q, want %q", env.Error.Code, output.ErrCodeConfirmationRequired)
+	}
+	// Message must name the command path so skills can diagnose which
+	// mutating subcommand rejected the invocation without re-parsing.
+	if !strings.Contains(env.Error.Message, "test-mutate") {
+		t.Errorf("error.message = %q, want to contain command path %q", env.Error.Message, "test-mutate")
 	}
 }
 
 func TestMutationGuard_WithYes_Proceeds(t *testing.T) {
 	sterilizeEnv(t)
 
-	if err := runWithMutating(t, []string{"test-mutate", "--yes"}); err != nil {
-		t.Errorf("Execute with --yes returned error: %v", err)
+	_, stderr, code := runWithMutating(t, []string{"test-mutate", "--yes"})
+	if code != output.ExitSuccess {
+		t.Errorf("exit code = %d, want %d (stderr=%q)", code, output.ExitSuccess, stderr.String())
 	}
 }
 
 func TestMutationGuard_WithDryRun_Proceeds(t *testing.T) {
 	sterilizeEnv(t)
 
-	if err := runWithMutating(t, []string{"test-mutate", "--dry-run"}); err != nil {
-		t.Errorf("Execute with --dry-run returned error: %v", err)
+	_, stderr, code := runWithMutating(t, []string{"test-mutate", "--dry-run"})
+	if code != output.ExitSuccess {
+		t.Errorf("exit code = %d, want %d (stderr=%q)", code, output.ExitSuccess, stderr.String())
 	}
 }
 
-func TestMutationGuard_NonMutatingCommand_NoGuard(t *testing.T) {
-	// Without the annotation, version must run regardless of --yes/--dry-run.
+func TestMutationGuard_UnannotatedCommand_Proceeds(t *testing.T) {
+	// Without the annotation, version must run regardless of
+	// --yes/--dry-run. The guard must only fire for opted-in commands.
 	sterilizeEnv(t)
 
-	if err := runWithMutating(t, []string{"version"}); err != nil {
-		t.Errorf("non-mutating command blocked without --yes: %v", err)
+	_, stderr, code := runWithMutating(t, []string{"version"})
+	if code != output.ExitSuccess {
+		t.Errorf("exit code = %d, want %d (stderr=%q)", code, output.ExitSuccess, stderr.String())
 	}
 }
