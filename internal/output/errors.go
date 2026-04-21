@@ -35,6 +35,7 @@ const (
 // Error code constants in UPPER_SNAKE_CASE per the contract. Adding a
 // new code is additive; renaming or removing is a major-version bump.
 const (
+	ErrCodeConfirmationRequired    = "CONFIRMATION_REQUIRED"
 	ErrCodeHumanOutputNotSupported = "HUMAN_OUTPUT_NOT_SUPPORTED"
 	ErrCodeInvalidFlag             = "INVALID_FLAG"
 	ErrCodeInvalidLogLevel         = "INVALID_LOG_LEVEL"

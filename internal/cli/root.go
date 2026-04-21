@@ -44,6 +44,7 @@ const (
 const (
 	annotationMachineOnly = cliName + "/machine-only"
 	annotationIdempotent  = cliName + "/idempotent"
+	annotationMutating    = cliName + "/mutating"
 )
 
 // BuildInfo carries compile-time version metadata injected via -ldflags
@@ -101,7 +102,14 @@ type depsKey struct{}
 // stderr are threaded through to subcommands via Deps; pass os.Stdout
 // and os.Stderr from main, bytes.Buffer from tests.
 func Run(ctx context.Context, bi BuildInfo, args []string, stdout, stderr io.Writer) output.ExitCode {
-	cmd := NewRoot(bi, stdout, stderr)
+	return runCmdTree(ctx, NewRoot(bi, stdout, stderr), args)
+}
+
+// runCmdTree executes cmd against args and routes any error through
+// writeErrorAndExit — the same pipeline Run uses. Extracted so
+// internal tests can inject extra subcommands into the tree before
+// Execute and still exercise the full error-rendering path.
+func runCmdTree(ctx context.Context, cmd *cobra.Command, args []string) output.ExitCode {
 	cmd.SetArgs(args)
 	cmd.SetContext(ctx)
 	if err := cmd.Execute(); err != nil {
@@ -133,6 +141,20 @@ func NewRoot(bi BuildInfo, stdout, stderr io.Writer) *cobra.Command {
 			}
 			deps.Stdout = stdout
 			deps.Stderr = stderr
+
+			// Mutation guard: any command marked with
+			// annotationMutating must receive --yes or --dry-run. The
+			// check runs after buildDeps so deps.Flags reflects the
+			// resolved values (flag > env > file > default) rather than
+			// pflag's pre-backfill state.
+			if c.Annotations[annotationMutating] == "true" && !deps.Flags.Yes && !deps.Flags.DryRun {
+				return &output.Error{
+					Code:     output.ErrCodeConfirmationRequired,
+					Message:  fmt.Sprintf("%q mutates state; pass --yes to proceed or --dry-run to preview", c.CommandPath()),
+					ExitCode: output.ExitUserError,
+				}
+			}
+
 			c.SetContext(context.WithValue(c.Context(), depsKey{}, deps))
 			return nil
 		},

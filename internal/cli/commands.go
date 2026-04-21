@@ -135,6 +135,7 @@ func exitCodeMap() map[string]int {
 
 func errorCodeList() []string {
 	return []string{
+		output.ErrCodeConfirmationRequired,
 		output.ErrCodeHumanOutputNotSupported,
 		output.ErrCodeInvalidFlag,
 		output.ErrCodeInvalidLogLevel,
