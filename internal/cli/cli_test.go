@@ -390,6 +390,51 @@ func keysOf(m map[string]json.RawMessage) []string {
 	return out
 }
 
+func TestRun_ConfigView_RedactsSensitiveValues(t *testing.T) {
+	isolatedEnv(t)
+	t.Setenv("GO_CLI_TEMPLATE_TOKEN", "super-secret-value-xxx")
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{"config", "view"},
+		&stdout,
+		&stderr,
+	)
+
+	if code != output.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d (stderr=%q)", code, output.ExitSuccess, stderr.String())
+	}
+
+	var got struct {
+		Values map[string]struct {
+			Value  any    `json:"value"`
+			Source string `json:"source"`
+		} `json:"values"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; stdout=%q", err, stdout.String())
+	}
+
+	tokenEntry, ok := got.Values["token"]
+	if !ok {
+		t.Fatalf("values[%q] missing; got keys %v", "token", got.Values)
+	}
+	if tokenEntry.Value != output.Redacted {
+		t.Errorf("values[token].value = %v, want %q", tokenEntry.Value, output.Redacted)
+	}
+	// Source attribution must be preserved — skills still need to know
+	// where the secret came from, just not what it was.
+	if tokenEntry.Source != "env" {
+		t.Errorf("values[token].source = %q, want %q", tokenEntry.Source, "env")
+	}
+	// Guard: the real value must not appear anywhere in the output.
+	if strings.Contains(stdout.String(), "super-secret-value-xxx") {
+		t.Errorf("secret value leaked into stdout: %q", stdout.String())
+	}
+}
+
 func TestRun_UnknownFlag_EnvOutputMode_RendersHuman(t *testing.T) {
 	// Pre-parse errors (unknown flag) never reach PersistentPreRunE, so
 	// backfillFlags doesn't run. writeErrorAndExit must still respect
