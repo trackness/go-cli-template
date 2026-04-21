@@ -52,19 +52,20 @@ func (f *fakeTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// newSyncTestClient mirrors buildDeps' resty wiring but hangs off a
-// fakeTripper so every request lands on a canned response in the
-// synctest bubble. All retry behaviour (jitter, Retry-After, cap
-// enforcement, condition) is exercised identically to production.
+// newSyncTestClient installs the same retry hooks buildDeps registers
+// on the production client but hangs off a fakeTripper so every
+// request lands on a canned response in the synctest bubble. Chain
+// order mirrors root.go: AddRetryCondition before SetRetryAfter and
+// OnAfterResponse.
 func newSyncTestClient(tripper *fakeTripper) *resty.Client {
 	return resty.NewWithClient(&http.Client{Transport: tripper}).
 		SetBaseURL("http://synctest.invalid").
 		SetRetryCount(2).
 		SetRetryWaitTime(retryBaseWait).
 		SetRetryMaxWaitTime(retryAfterCap).
+		AddRetryCondition(retryCondition).
 		SetRetryAfter(retryAfter).
-		OnAfterResponse(enforceRetryAfterCap).
-		AddRetryCondition(retryCondition)
+		OnAfterResponse(enforceRetryAfterCap)
 }
 
 func TestSynctest_RetryAfter_ServerValueWithinCap_Honoured(t *testing.T) {
@@ -133,6 +134,17 @@ func TestSynctest_RetryAfter_ServerValueAboveCap_FailsFast(t *testing.T) {
 		if oe.Code != output.ErrCodeRetryAfterTooLong {
 			t.Errorf("code = %q, want %q", oe.Code, output.ErrCodeRetryAfterTooLong)
 		}
+		if oe.ExitCode != output.ExitTargetError {
+			t.Errorf("exit code = %d, want %d", oe.ExitCode, output.ExitTargetError)
+		}
+		// Details payload is contract surface; skills branch on the
+		// stringified duration and cap, not prose.
+		if oe.Details["retry_after"] != "15s" {
+			t.Errorf("details.retry_after = %v, want %q", oe.Details["retry_after"], "15s")
+		}
+		if oe.Details["cap"] != "10s" {
+			t.Errorf("details.cap = %v, want %q", oe.Details["cap"], "10s")
+		}
 		// Fail-fast: cap-enforcement in OnAfterResponse means we
 		// never enter a wait at all.
 		if elapsed > 100*time.Millisecond {
@@ -152,9 +164,19 @@ func TestSynctest_RetryAfter_GarbageHeader_FallsThroughToBackoff(t *testing.T) {
 			{status: http.StatusServiceUnavailable, headers: map[string]string{"Retry-After": "hot-dog"}},
 		}}
 
+		start := time.Now()
 		_, _ = newSyncTestClient(tripper).R().Get("/")
+		elapsed := time.Since(start)
+
 		if tripper.calls != 3 {
 			t.Errorf("calls = %d, want 3 (garbage header must fall through to retry loop)", tripper.calls)
+		}
+		// Backoff waits at attempts 1 and 2: ~100ms + ~200ms = ~300ms
+		// ±20% jitter. Even at the top of the jitter range the sum is
+		// < 400ms; well under 1s. A regression that silently parsed
+		// "hot-dog" as a large duration would blow past this bound.
+		if elapsed >= 1*time.Second {
+			t.Errorf("elapsed = %v, want < 1s (computed backoff, not an honoured bogus wait)", elapsed)
 		}
 	})
 }

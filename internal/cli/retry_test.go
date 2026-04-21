@@ -183,15 +183,17 @@ func TestRetryCondition_POSTNotRetried(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	// Build a resty client wired identically to buildDeps' production
-	// config so the test exercises the same retry pipeline.
-	client := resty.New().
+	// config so the test exercises the same retry pipeline. Explicit
+	// *http.Client per CLAUDE.md "HTTP client" — never resty.New()
+	// with defaults.
+	client := resty.NewWithClient(&http.Client{}).
 		SetBaseURL(srv.URL).
 		SetRetryCount(2).
 		SetRetryWaitTime(retryBaseWait).
 		SetRetryMaxWaitTime(retryAfterCap).
+		AddRetryCondition(retryCondition).
 		SetRetryAfter(retryAfter).
-		OnAfterResponse(enforceRetryAfterCap).
-		AddRetryCondition(retryCondition)
+		OnAfterResponse(enforceRetryAfterCap)
 	_, _ = client.R().Post("/")
 	if calls != 1 {
 		t.Errorf("POST handler calls = %d, want 1 (retryCondition must not retry non-idempotent methods)", calls)
