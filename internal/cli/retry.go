@@ -30,7 +30,15 @@ const retryMaxWait = 5 * time.Second
 // retryCondition enforces the contract-mandated retry policy: GET and
 // HEAD only; status 429/502/503/504 or transport error. PUT, POST,
 // DELETE, and PATCH are never auto-retried — the skill decides.
+//
+// A structured *output.Error (produced by enforceRetryAfterCap or any
+// future middleware) is treated as terminal: the situation has
+// already been diagnosed, retrying would only repeat the diagnosis.
 func retryCondition(resp *resty.Response, err error) bool {
+	var oe *output.Error
+	if errors.As(err, &oe) {
+		return false
+	}
 	if resp == nil {
 		return err != nil
 	}
@@ -51,27 +59,56 @@ func retryCondition(resp *resty.Response, err error) bool {
 	return false
 }
 
-// retryAfter is the resty RetryAfter callback. It honours the server's
-// Retry-After header up to retryAfterCap; beyond the cap it returns a
-// structured error that fails the request rather than blocks. When the
-// server does not send Retry-After, falls back to an exponential
-// backoff with ±20% jitter.
+// enforceRetryAfterCap is a resty OnAfterResponse hook that aborts the
+// request when the server's Retry-After exceeds retryAfterCap. Moving
+// the cap to OnAfterResponse (rather than the RetryAfter callback)
+// means the policy fires regardless of --no-retry: a hostile server
+// cannot hand a retries-disabled invocation a raw 429 with
+// Retry-After: 99999.
+//
+// The returned *output.Error travels through resty's retry machinery
+// wrapped and unwrapped (see client.go/request.go in resty); callers
+// ultimately see the raw *output.Error type. retryCondition treats
+// any *output.Error as terminal so the retry loop (when enabled)
+// exits immediately rather than retrying the same doomed request.
+func enforceRetryAfterCap(_ *resty.Client, resp *resty.Response) error {
+	if resp == nil {
+		return nil
+	}
+	raw := resp.Header().Get("Retry-After")
+	if raw == "" {
+		return nil
+	}
+	d, err := parseRetryAfter(raw)
+	if err != nil {
+		return nil
+	}
+	if d <= retryAfterCap {
+		return nil
+	}
+	return &output.Error{
+		Code:    output.ErrCodeRetryAfterTooLong,
+		Message: fmt.Sprintf("server requested Retry-After %s (cap %s); aborting rather than blocking", d, retryAfterCap),
+		Details: map[string]any{
+			"retry_after": d.String(),
+			"cap":         retryAfterCap.String(),
+		},
+		ExitCode: output.ExitTargetError,
+	}
+}
+
+// retryAfter is the resty RetryAfter callback: computes the wait
+// before the next retry when the retry loop is active. Honours the
+// server's Retry-After header when in-cap; falls back to an
+// exponential backoff with ±20% jitter when absent or unparseable.
+//
+// The over-cap check lives in enforceRetryAfterCap (OnAfterResponse)
+// so it runs regardless of --no-retry. retryAfter assumes any
+// response it receives has already passed that gate.
 func retryAfter(_ *resty.Client, resp *resty.Response) (time.Duration, error) {
 	if resp != nil {
 		if raw := resp.Header().Get("Retry-After"); raw != "" {
-			d, err := parseRetryAfter(raw)
-			if err == nil {
-				if d > retryAfterCap {
-					return 0, &output.Error{
-						Code:    output.ErrCodeRetryAfterTooLong,
-						Message: fmt.Sprintf("server requested Retry-After %s (cap %s); aborting rather than blocking", d, retryAfterCap),
-						Details: map[string]any{
-							"retry_after": d.String(),
-							"cap":         retryAfterCap.String(),
-						},
-						ExitCode: output.ExitTargetError,
-					}
-				}
+			if d, err := parseRetryAfter(raw); err == nil {
 				if d < 0 {
 					d = 0
 				}

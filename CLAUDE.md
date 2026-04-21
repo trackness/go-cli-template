@@ -234,6 +234,8 @@ state leaks across invocations.
   retries stop.
 - **`Retry-After`** is honoured up to a 10s cap. If the server requests
   longer, fail immediately with a structured error rather than block.
+  The cap fires regardless of `--no-retry` — a hostile or misconfigured
+  server cannot bypass it by targeting a retries-disabled invocation.
 - **`--no-retry`** disables all retries. Skills with their own retry
   layer set this to avoid double-retry.
 - **Exit code mapping:** retries exhausted on transport error → exit

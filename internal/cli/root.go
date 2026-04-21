@@ -304,6 +304,13 @@ func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
 		SetRetryMaxWaitTime(retryAfterCap).
 		AddRetryCondition(retryCondition).
 		SetRetryAfter(retryAfter).
+		// enforceRetryAfterCap must remain the last OnAfterResponse
+		// hook: resty runs them in registration order and stops at
+		// the first error, so any later hook that returned a
+		// different error on the same 429 would mask the cap abort.
+		// Descendants adding response middleware should register
+		// before this line.
+		OnAfterResponse(enforceRetryAfterCap).
 		SetLogger(&slogRestyLogger{Logger: logger})
 	if level == slog.LevelDebug {
 		r.EnableGenerateCurlOnDebug()
