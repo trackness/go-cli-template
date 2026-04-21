@@ -27,8 +27,8 @@ Output is an API. Treat every change to output shape as a breaking change.
   human` (short `-o human`). No third mode unless `PROJECT.md` adds one.
   Unrecognised `--output` values exit `1` with `INVALID_OUTPUT_MODE`.
 - **Default (JSON) mode is strict.** stdout contains a single JSON document
-  (or NDJSON for streams) — nothing else. No ANSI, no progress bars, no
-  banners. Logs go to stderr regardless of mode.
+  — nothing else. No ANSI, no progress bars, no banners. Logs go to
+  stderr regardless of mode.
 - **Help and usage routing.** Cobra's help and usage output is routed to
   stderr via `cmd.SetOut(os.Stderr)` on the root command. `--help` and
   `help` still dispatch through cobra's rendering, but land on stderr;
@@ -84,8 +84,7 @@ Output is an API. Treat every change to output shape as a breaking change.
 - **Versioning.** `version` emits the tool version. When the tool has reached
   a target system in the invocation, it also emits the target version seen.
 - **Output changes are versioned.** Any change to JSON shape, error codes,
-  exit-code meaning, or human-mode support bumps the major version and
-  lands in CHANGELOG.
+  exit-code meaning, or human-mode support bumps the major version.
 
 ## Go version
 
@@ -430,7 +429,7 @@ helper. Its transitive deps (`github.com/mattn/go-isatty`,
 - Every command has a golden JSON fixture in `testdata/` for its
   default-mode output. Commands that implement `-o human` also have a
   golden text fixture. Output changes require a golden update and a
-  CHANGELOG entry.
+  major-version bump.
 - `t.TempDir()` for filesystem work; never `os.TempDir()` directly.
 - Integration tests behind `//go:build integration` with a separate
   `task` target.

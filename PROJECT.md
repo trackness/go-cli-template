@@ -21,14 +21,12 @@ variance belongs here, not in `CLAUDE.md`.
 - **Mechanism:** <bearer token / mTLS / basic / none>
 - **Env var:** `<CLI_NAME>_TOKEN` (or equivalent)
 - **Flag:** `--token` (overrides env)
-- **Config precedence:** flag > env > config file > default
+- **Config precedence:** flag > env > file > default
 
 ## Endpoints and connection
 
 - **Flag:** `--endpoint` (default `<URL>`)
 - **Env var:** `<CLI_NAME>_ENDPOINT`
-- **TLS verification:** on by default; `--insecure` disables with a stderr
-  warning
 - **Default timeout:** <Ns>
 
 ## Retry policy
@@ -117,8 +115,6 @@ env var of form `<CLI_NAME>_<KEY>`.
 endpoint: <url>
 token: <string>           # sensitive; prefer env or flag over file
 timeout: <duration>       # e.g. 30s
-tls:
-  insecure: false         # set true to skip verification (warns on stderr)
 log-level: info
 ```
 

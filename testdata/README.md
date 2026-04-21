@@ -19,5 +19,4 @@ Goldens are captured by the test harness under an update flag (e.g.
 `go test ./... -update`). Do not edit by hand.
 
 Per `CLAUDE.md` (Audience and output contract), any output shape change
-requires both a golden update and a `CHANGELOG.md` entry bumping the major
-version.
+requires a golden update and bumps the major version.

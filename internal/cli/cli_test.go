@@ -200,9 +200,24 @@ func TestRun_Env_OutputMode_Backfills(t *testing.T) {
 	}
 }
 
-func TestRun_Env_LogLevel_KeyUsesDashes(t *testing.T) {
+func TestRun_ConfigView_FiltersCLIOnlyKeys(t *testing.T) {
+	// Two claims at once:
+	//   1. CLI-layer flags (--output, --log-level, --timeout,
+	//      --config, --yes, --dry-run, --no-retry) are filtered out
+	//      of config view's Values map.
+	//   2. Non-CLI env keys pass through with the flat-dash
+	//      transform — GO_CLI_TEMPLATE_CUSTOM_THING lands at
+	//      "custom-thing" (not "custom.thing"), exercising B2's
+	//      transform. Name deliberately avoids sensitive suffixes
+	//      (-key, -token, -secret, -password) so the redaction layer
+	//      doesn't confound the assertion. Without this second claim
+	//      a regression to dots would silently escape the filter
+	//      test.
 	isolatedEnv(t)
 	t.Setenv("GO_CLI_TEMPLATE_LOG_LEVEL", "debug")
+	t.Setenv("GO_CLI_TEMPLATE_OUTPUT", "json")
+	t.Setenv("GO_CLI_TEMPLATE_YES", "true")
+	t.Setenv("GO_CLI_TEMPLATE_CUSTOM_THING", "42")
 
 	var stdout, stderr bytes.Buffer
 	code := cli.Run(
@@ -226,15 +241,16 @@ func TestRun_Env_LogLevel_KeyUsesDashes(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; stdout=%q", err, stdout.String())
 	}
-	v, ok := got.Values["log-level"]
+	for _, cliKey := range []string{"output", "log-level", "timeout", "config", "yes", "dry-run", "no-retry"} {
+		if _, present := got.Values[cliKey]; present {
+			t.Errorf("values[%q] must not appear in config view (CLI-layer key); got keys %v", cliKey, got.Values)
+		}
+	}
+	custom, ok := got.Values["custom-thing"]
 	if !ok {
-		t.Errorf("values[%q] missing; keys present: %v", "log-level", got.Values)
-	}
-	if v.Value != "debug" {
-		t.Errorf("values[log-level].value = %v, want %q", v.Value, "debug")
-	}
-	if v.Source != "env" {
-		t.Errorf("values[log-level].source = %q, want %q", v.Source, "env")
+		t.Errorf("values[%q] missing; env key transform regressed? got keys %v", "custom-thing", got.Values)
+	} else if custom.Value != "42" || custom.Source != "env" {
+		t.Errorf("values[custom-thing] = %+v, want {Value: \"42\", Source: \"env\"}", custom)
 	}
 }
 

@@ -33,9 +33,4 @@ tasks:
     cmds:
       - goreleaser release --snapshot --clean
 
-  generate:
-    desc: Regenerate code (present only when codegen is opted in)
-    cmds:
-      - go generate ./...
-
 # --- per-repo tasks below ---

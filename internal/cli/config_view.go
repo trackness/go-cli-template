@@ -44,6 +44,24 @@ func newConfigViewCommand() *cobra.Command {
 	}
 }
 
+// cliOnlyKeys names the persistent-flag keys that control the CLI
+// itself rather than the target system. config view hides them so
+// Values shows only target-specific keys descendants add. --config is
+// additionally redundant with ConfigPath at the top of the envelope.
+//
+// Descendants that want a given key resurfaced (e.g. log-level for an
+// operator debugging log verbosity propagation) can delete it from
+// this map in an init function of their own package.
+var cliOnlyKeys = map[string]bool{
+	"config":    true,
+	"dry-run":   true,
+	"log-level": true,
+	"no-retry":  true,
+	"output":    true,
+	"timeout":   true,
+	"yes":       true,
+}
+
 func buildConfigView(layers *ConfigLayers, pathSource string) ConfigViewOutput {
 	out := ConfigViewOutput{
 		ConfigPath:       layers.FilePath,
@@ -53,6 +71,9 @@ func buildConfigView(layers *ConfigLayers, pathSource string) ConfigViewOutput {
 	keys := layers.Merged.Keys()
 	sort.Strings(keys)
 	for _, k := range keys {
+		if cliOnlyKeys[k] {
+			continue
+		}
 		out.Values[k] = ConfigValue{
 			Value:  output.RedactValue(k, layers.Merged.Get(k)),
 			Source: attributeSource(layers, k),
