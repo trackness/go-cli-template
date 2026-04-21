@@ -101,104 +101,13 @@ func TestJitteredBackoff_CapsAt5s(t *testing.T) {
 	}
 }
 
-// newTestClient builds a minimal resty client hitting the given httptest
-// server and wired with the same retry-related settings buildDeps
-// installs on the production client. Must mirror buildDeps so tests
-// exercise the real resty interaction, not a divergent harness config.
-func newTestClient(srv *httptest.Server) *resty.Client {
-	return resty.New().
-		SetBaseURL(srv.URL).
-		SetRetryCount(2).
-		SetRetryWaitTime(retryBaseWait).
-		SetRetryMaxWaitTime(retryAfterCap).
-		SetRetryAfter(retryAfter).
-		OnAfterResponse(enforceRetryAfterCap).
-		AddRetryCondition(retryCondition)
-}
-
-func TestRetryAfter_ServerValueWithinCap_Honoured(t *testing.T) {
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		if calls < 2 {
-			w.Header().Set("Retry-After", "2")
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(srv.Close)
-
-	start := time.Now()
-	resp, err := newTestClient(srv).R().Get("/")
-	if err != nil {
-		t.Fatalf("Get err = %v", err)
-	}
-	if resp.StatusCode() != http.StatusOK {
-		t.Errorf("final status = %d, want 200", resp.StatusCode())
-	}
-	if calls != 2 {
-		t.Errorf("handler calls = %d, want 2 (one retry)", calls)
-	}
-	// Retry-After: 2 should produce ~2s wait; default computed backoff
-	// would be ~100-200ms. The 1500ms threshold cleanly discriminates
-	// while leaving 500ms of CI jitter headroom.
-	if elapsed := time.Since(start); elapsed < 1500*time.Millisecond {
-		t.Errorf("elapsed = %v, want ≥ 1.5s (Retry-After not honoured)", elapsed)
-	}
-}
-
-func TestRetryAfter_ServerValueBetweenComputedAndRetryAfterCap(t *testing.T) {
-	// A Retry-After value in the [5s, 10s] window must be honoured,
-	// not silently truncated to the computed-backoff cap (5s) by
-	// resty's SetRetryMaxWaitTime. Exercises the H1 fix.
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		if calls < 2 {
-			w.Header().Set("Retry-After", "7")
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(srv.Close)
-
-	start := time.Now()
-	_, err := newTestClient(srv).R().Get("/")
-	if err != nil {
-		t.Fatalf("Get err = %v", err)
-	}
-	// Expect ≥ 6.5s wait, well above the old 5s truncation ceiling.
-	if elapsed := time.Since(start); elapsed < 6500*time.Millisecond {
-		t.Errorf("elapsed = %v, want ≥ 6.5s (Retry-After 7 truncated to ≤ 5s — H1 regression)", elapsed)
-	}
-}
-
-func TestRetryAfter_GarbageHeader_FallsThroughToBackoff(t *testing.T) {
-	// An unparseable Retry-After value must not abort retries; fall
-	// through to the computed backoff path.
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		w.Header().Set("Retry-After", "hot-dog")
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	t.Cleanup(srv.Close)
-
-	start := time.Now()
-	_, _ = newTestClient(srv).R().Get("/")
-	elapsed := time.Since(start)
-
-	if calls != 3 {
-		t.Errorf("calls = %d, want 3 (parse fallback must still retry)", calls)
-	}
-	// Elapsed should reflect the computed-backoff path (~100 + ~200 ≈
-	// 300ms ±jitter), not a honoured Retry-After.
-	if elapsed > 2*time.Second {
-		t.Errorf("elapsed = %v, want computed-backoff (<2s); garbage header shouldn't have honoured anything", elapsed)
-	}
-}
+// Retry timing tests that would otherwise sleep for real wall-clock
+// seconds are implemented in retry_sync_test.go using testing/synctest
+// — TestSynctest_RetryAfter_* there exercises the same retry contract
+// in zero real time. newTestClient no longer exists; tests that want
+// a resty client should either build one inline via httptest
+// (non-timing tests) or use newSyncTestClient inside a synctest
+// bubble (timing tests).
 
 // newBuildDepsPflagSet mirrors the persistent flags registered on the
 // root command so buildDeps can be called directly from tests without
@@ -263,43 +172,6 @@ func TestDefaultRetry_RetriesTransientFailure(t *testing.T) {
 	}
 }
 
-func TestRetryAfter_ServerValueAboveCap_FailsFast(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Retry-After", "15")
-		w.WriteHeader(http.StatusTooManyRequests)
-	}))
-	t.Cleanup(srv.Close)
-
-	start := time.Now()
-	_, err := newTestClient(srv).R().Get("/")
-	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatal("err = nil, want RETRY_AFTER_TOO_LONG")
-	}
-	var oe *output.Error
-	if !errors.As(err, &oe) {
-		t.Fatalf("err not *output.Error: %v", err)
-	}
-	if oe.Code != output.ErrCodeRetryAfterTooLong {
-		t.Errorf("code = %q, want %q", oe.Code, output.ErrCodeRetryAfterTooLong)
-	}
-	if oe.ExitCode != output.ExitTargetError {
-		t.Errorf("exit code = %d, want %d", oe.ExitCode, output.ExitTargetError)
-	}
-	// Details payload is contract surface; skills branch on the
-	// stringified duration and cap, not prose.
-	if oe.Details["retry_after"] != "15s" {
-		t.Errorf("details.retry_after = %v, want %q", oe.Details["retry_after"], "15s")
-	}
-	if oe.Details["cap"] != "10s" {
-		t.Errorf("details.cap = %v, want %q", oe.Details["cap"], "10s")
-	}
-	// Fail-fast: should not have slept anywhere near 15s.
-	if elapsed > 2*time.Second {
-		t.Errorf("elapsed = %v, want fail-fast (< 2s) not wait for Retry-After", elapsed)
-	}
-}
-
 func TestRetryCondition_POSTNotRetried(t *testing.T) {
 	// retryCondition restricts retries to GET/HEAD. A POST that
 	// returns 503 must NOT be retried — the skill decides, not us.
@@ -310,7 +182,19 @@ func TestRetryCondition_POSTNotRetried(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, _ = newTestClient(srv).R().Post("/")
+	// Build a resty client wired identically to buildDeps' production
+	// config so the test exercises the same retry pipeline. Explicit
+	// *http.Client per CLAUDE.md "HTTP client" — never resty.New()
+	// with defaults.
+	client := resty.NewWithClient(&http.Client{}).
+		SetBaseURL(srv.URL).
+		SetRetryCount(2).
+		SetRetryWaitTime(retryBaseWait).
+		SetRetryMaxWaitTime(retryAfterCap).
+		AddRetryCondition(retryCondition).
+		SetRetryAfter(retryAfter).
+		OnAfterResponse(enforceRetryAfterCap)
+	_, _ = client.R().Post("/")
 	if calls != 1 {
 		t.Errorf("POST handler calls = %d, want 1 (retryCondition must not retry non-idempotent methods)", calls)
 	}
