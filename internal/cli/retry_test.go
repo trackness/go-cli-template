@@ -364,18 +364,21 @@ func TestInvalidTimeout_Errors(t *testing.T) {
 }
 
 // newFetchCmd returns a test-only leaf that makes a single GET
-// through deps.Resty. Used to exercise full-pipeline paths
+// through deps.Resty and surfaces the resty error (if any) as the
+// command's RunE return. Used to exercise full-pipeline paths
 // (PersistentPreRunE → buildDeps → backfill → resty request) in
 // situations where calling buildDeps directly would skip
-// command-tree concerns like env backfill.
+// command-tree concerns like env backfill. Returning the error means
+// tests can assert on transport failures via writeErrorAndExit's
+// structured envelope rather than only via handler side-effects.
 func newFetchCmd(baseURL string) *cobra.Command {
 	return &cobra.Command{
 		Use: "test-fetch",
 		RunE: func(c *cobra.Command, _ []string) error {
 			deps := depsFromContext(c.Context())
 			deps.Resty.SetBaseURL(baseURL)
-			_, _ = deps.Resty.R().Get("/")
-			return nil
+			_, err := deps.Resty.R().Get("/")
+			return err
 		},
 	}
 }
@@ -449,6 +452,27 @@ func TestRunCmdTree_NoGoroutineLeak_PanicPath(t *testing.T) {
 		},
 	})
 	_ = runCmdTree(context.Background(), cmd, []string{"test-panic"})
+}
+
+func TestRunCmdTree_NoGoroutineLeak_PersistentPreRunError(t *testing.T) {
+	// Belt-and-braces for the fourth exit path: PersistentPreRunE
+	// itself fails (here via an invalid --log-level from env) BEFORE
+	// the context.WithTimeout wrap is installed. No timer was ever
+	// created, so the cancelTimeout guard at runCmdTree's defer
+	// correctly no-ops. goleak locks the invariant — any future
+	// refactor that installs the timer before the validation error
+	// path would fail here rather than silently leak.
+	defer goleak.VerifyNone(t)
+
+	sterilizeEnv(t)
+	t.Setenv("GO_CLI_TEMPLATE_LOG_LEVEL", "not-a-level")
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(BuildInfo{Version: "test-v0.0.0"}, &stdout, &stderr)
+	code := runCmdTree(context.Background(), cmd, []string{"version"})
+	if code != output.ExitUserError {
+		t.Errorf("exit code = %d, want %d (stderr=%q)", code, output.ExitUserError, stderr.String())
+	}
 }
 
 func TestParseRetryAfter_NegativeDelta_ReturnsZero(t *testing.T) {
