@@ -26,6 +26,48 @@ func isolatedEnv(t *testing.T) {
 	t.Setenv("GO_CLI_TEMPLATE_DRY_RUN", "")
 }
 
+// errorEnvelope is the parsed shape of stderr in JSON error cases.
+type errorEnvelope struct {
+	Error struct {
+		Code    string         `json:"code"`
+		Message string         `json:"message"`
+		Details map[string]any `json:"details,omitempty"`
+	} `json:"error"`
+}
+
+func parseErrorEnvelope(t *testing.T, b []byte) errorEnvelope {
+	t.Helper()
+	var env errorEnvelope
+	if err := json.Unmarshal(b, &env); err != nil {
+		t.Fatalf("unmarshal error envelope %q: %v", string(b), err)
+	}
+	return env
+}
+
+func TestRun_BareRoot_ErrorsSubcommandRequired(t *testing.T) {
+	isolatedEnv(t)
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{},
+		&stdout,
+		&stderr,
+	)
+
+	if code != output.ExitUserError {
+		t.Errorf("exit code = %d, want %d (stderr=%q)", code, output.ExitUserError, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout non-empty: %q", stdout.String())
+	}
+	env := parseErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != output.ErrCodeSubcommandRequired {
+		t.Errorf("error.code = %q, want %q", env.Error.Code, output.ErrCodeSubcommandRequired)
+	}
+}
+
 func TestRun_Version_JSONMode_Succeeds(t *testing.T) {
 	isolatedEnv(t)
 

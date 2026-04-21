@@ -40,6 +40,7 @@ const (
 	ErrCodeInvalidLogLevel         = "INVALID_LOG_LEVEL"
 	ErrCodeMalformedConfigFile     = "MALFORMED_CONFIG_FILE"
 	ErrCodeMissingRequiredValue    = "MISSING_REQUIRED_VALUE"
+	ErrCodeSubcommandRequired      = "SUBCOMMAND_REQUIRED"
 	ErrCodeUnknown                 = "UNKNOWN"
 )
 

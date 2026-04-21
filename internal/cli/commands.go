@@ -137,6 +137,7 @@ func errorCodeList() []string {
 		output.ErrCodeInvalidLogLevel,
 		output.ErrCodeMalformedConfigFile,
 		output.ErrCodeMissingRequiredValue,
+		output.ErrCodeSubcommandRequired,
 		output.ErrCodeUnknown,
 	}
 }

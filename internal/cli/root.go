@@ -136,6 +136,9 @@ func NewRoot(bi BuildInfo, stdout, stderr io.Writer) *cobra.Command {
 			c.SetContext(context.WithValue(c.Context(), depsKey{}, deps))
 			return nil
 		},
+		RunE: func(c *cobra.Command, _ []string) error {
+			return subcommandRequiredError(c.CommandPath())
+		},
 	}
 	// Route cobra's help and usage to stderr; stdout is reserved for
 	// command output. SetErr is explicit so writeErrorAndExit can read
@@ -348,6 +351,17 @@ func resolveConfigPath(pfs *pflag.FlagSet, explicit string) (path, source string
 	}
 
 	return "", "none"
+}
+
+// subcommandRequiredError is the error returned when a command group
+// (root, `config`, etc.) is invoked without a subcommand. Skills branch
+// on ErrCodeSubcommandRequired to know to re-dispatch with one.
+func subcommandRequiredError(path string) *output.Error {
+	return &output.Error{
+		Code:     output.ErrCodeSubcommandRequired,
+		Message:  fmt.Sprintf("%q requires a subcommand; see %q --help", path, path),
+		ExitCode: output.ExitUserError,
+	}
 }
 
 // writeErrorAndExit renders err to the command's configured stderr in
