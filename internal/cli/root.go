@@ -44,6 +44,7 @@ const (
 const (
 	annotationMachineOnly = cliName + "/machine-only"
 	annotationIdempotent  = cliName + "/idempotent"
+	annotationMutating    = cliName + "/mutating"
 )
 
 // BuildInfo carries compile-time version metadata injected via -ldflags
@@ -133,6 +134,20 @@ func NewRoot(bi BuildInfo, stdout, stderr io.Writer) *cobra.Command {
 			}
 			deps.Stdout = stdout
 			deps.Stderr = stderr
+
+			// Mutation guard: any command marked with
+			// annotationMutating must receive --yes or --dry-run. The
+			// check runs after buildDeps so deps.Flags reflects the
+			// resolved values (flag > env > file > default) rather than
+			// pflag's pre-backfill state.
+			if c.Annotations[annotationMutating] == "true" && !deps.Flags.Yes && !deps.Flags.DryRun {
+				return &output.Error{
+					Code:     output.ErrCodeConfirmationRequired,
+					Message:  fmt.Sprintf("%q mutates state; pass --yes to proceed or --dry-run to preview", c.CommandPath()),
+					ExitCode: output.ExitUserError,
+				}
+			}
+
 			c.SetContext(context.WithValue(c.Context(), depsKey{}, deps))
 			return nil
 		},
