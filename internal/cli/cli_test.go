@@ -581,6 +581,9 @@ func TestRun_Commands_ConfigView_HumanOutputFalse(t *testing.T) {
 // The field-level tests elsewhere in this file cover behavioural
 // invariants; these tests fence byte-for-byte regressions skills
 // would otherwise discover in production.
+//
+// Per CLAUDE.md "Audience and output contract", any shape change
+// here is a major-version bump of the CLI.
 
 func TestRun_Version_Golden(t *testing.T) {
 	isolatedEnv(t)
@@ -595,7 +598,7 @@ func TestRun_Version_Golden(t *testing.T) {
 	if code != output.ExitSuccess {
 		t.Fatalf("exit code = %d (stderr=%q)", code, stderr.String())
 	}
-	testutil.AssertGolden(t, "testdata/version.json", stdout.Bytes())
+	testutil.AssertJSONGolden(t, "testdata/version.json", stdout.Bytes())
 }
 
 func TestRun_Commands_Golden(t *testing.T) {
@@ -614,7 +617,7 @@ func TestRun_Commands_Golden(t *testing.T) {
 	if code != output.ExitSuccess {
 		t.Fatalf("exit code = %d (stderr=%q)", code, stderr.String())
 	}
-	testutil.AssertGolden(t, "testdata/commands.json", stdout.Bytes())
+	testutil.AssertJSONGolden(t, "testdata/commands.json", stdout.Bytes())
 }
 
 func TestRun_ConfigView_Golden(t *testing.T) {
@@ -633,7 +636,7 @@ func TestRun_ConfigView_Golden(t *testing.T) {
 	if code != output.ExitSuccess {
 		t.Fatalf("exit code = %d (stderr=%q)", code, stderr.String())
 	}
-	testutil.AssertGolden(t, "testdata/config_view_no_config.json", stdout.Bytes())
+	testutil.AssertJSONGolden(t, "testdata/config_view_no_config.json", stdout.Bytes())
 }
 
 func TestRun_Version_JSONMode_Succeeds(t *testing.T) {
