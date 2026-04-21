@@ -225,6 +225,47 @@ func TestRun_Env_LogLevel_KeyUsesDashes(t *testing.T) {
 	}
 }
 
+func TestRun_Commands_ConfigView_HumanOutputFalse(t *testing.T) {
+	isolatedEnv(t)
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{"commands"},
+		&stdout,
+		&stderr,
+	)
+
+	if code != output.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d (stderr=%q)", code, output.ExitSuccess, stderr.String())
+	}
+
+	var got struct {
+		Commands []struct {
+			Path        []string `json:"path"`
+			HumanOutput bool     `json:"human_output"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; stdout=%q", err, stdout.String())
+	}
+
+	var found bool
+	for _, cmd := range got.Commands {
+		if len(cmd.Path) == 2 && cmd.Path[0] == "config" && cmd.Path[1] == "view" {
+			found = true
+			if cmd.HumanOutput {
+				t.Errorf("config view: human_output = true, want false (introspection must agree with runtime rejection)")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("config view entry missing from commands output; got: %v", got.Commands)
+	}
+}
+
 func TestRun_Version_JSONMode_Succeeds(t *testing.T) {
 	isolatedEnv(t)
 

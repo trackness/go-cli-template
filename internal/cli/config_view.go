@@ -27,7 +27,8 @@ func newConfigViewCommand() *cobra.Command {
 		Use:   "view",
 		Short: "Emit resolved config with per-value source attribution",
 		Annotations: map[string]string{
-			annotationIdempotent: "true",
+			annotationMachineOnly: "true",
+			annotationIdempotent:  "true",
 		},
 		RunE: func(c *cobra.Command, _ []string) error {
 			deps := depsFromContext(c.Context())
