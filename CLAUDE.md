@@ -25,9 +25,16 @@ Output is an API. Treat every change to output shape as a breaking change.
 
 - **Dual output modes.** JSON by default; human-readable with `--output
   human` (short `-o human`). No third mode unless `PROJECT.md` adds one.
+  Unrecognised `--output` values exit `1` with `INVALID_OUTPUT_MODE`.
 - **Default (JSON) mode is strict.** stdout contains a single JSON document
   (or NDJSON for streams) — nothing else. No ANSI, no progress bars, no
   banners. Logs go to stderr regardless of mode.
+- **Help and usage routing.** Cobra's help and usage output is routed to
+  stderr via `cmd.SetOut(os.Stderr)` on the root command. `--help` and
+  `help` still dispatch through cobra's rendering, but land on stderr;
+  stdout stays reserved for command output. A bare command group
+  (root or any non-leaf) exits `1` with `SUBCOMMAND_REQUIRED` rather
+  than dumping help to stdout.
 - **Human mode is the exception.** `-o human` is the only mode where
   ANSI, colour, and Unicode box-drawing are permitted. Logs still go to
   stderr.
@@ -57,10 +64,16 @@ Output is an API. Treat every change to output shape as a breaking change.
 - **Paging discipline.** List commands default to a stated limit in `--help`.
   `--limit N` adjusts; `--all` is allowed with a stderr warning about output
   size. Never dump unbounded output to stdout by default.
-- **Introspection.** A `commands` subcommand emits the full command tree with
-  flags as JSON, so skills can discover the surface without parsing help text.
-  Each command's entry includes a `human_output` boolean indicating whether
-  `-o human` is supported.
+- **Introspection.** A `commands` subcommand emits the full command tree
+  with flags as JSON, so skills can discover the surface without parsing
+  help text. The emitted `CommandsOutput` shape is a versioned contract
+  surface; skills hard-code branches on its fields:
+  - top level: `name`, `commands` (array), `exit_codes` (map), `error_codes`
+    (array of stable upper-snake codes)
+  - per command entry: `path` (array from root), `short`, `flags`,
+    `human_output` (bool), `idempotent` (bool)
+  Adding a field is additive; renaming or removing one is a major-version
+  bump.
 - **Versioning.** `version` emits the tool version. When the tool has reached
   a target system in the invocation, it also emits the target version seen.
 - **Output changes are versioned.** Any change to JSON shape, error codes,
