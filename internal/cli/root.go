@@ -186,7 +186,9 @@ func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
 	//    not explicitly set them. Realises the documented precedence on
 	//    the struct commands read from. --config itself is not
 	//    backfilled (resolveConfigPath already consumed it).
-	backfillFlags(f, pfs, layers.Merged)
+	if err := backfillFlags(f, pfs, layers.Merged); err != nil {
+		return nil, err
+	}
 
 	// 3. Validate --output on the final resolved value. An unsupported
 	//    mode fails fast with a stable code rather than silently
@@ -237,11 +239,18 @@ func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
 
 // backfillFlags copies resolved values from the merged config layers
 // onto f for any flag the user did not explicitly set on the command
-// line. Empty string values in the merged layers are treated as
-// "unset" — so an env var like GO_CLI_TEMPLATE_OUTPUT="" does not
-// clobber a pflag default. --config is deliberately skipped because
-// resolveConfigPath already consumed it.
-func backfillFlags(f *Flags, pfs *pflag.FlagSet, merged *koanf.Koanf) {
+// line. --config is deliberately skipped because resolveConfigPath
+// already consumed it.
+//
+// For strings, empty values in the merged layers are treated as unset
+// (the env transform already filters exported-but-blank env vars; this
+// handles the same case arriving from a config file). For bools and
+// durations, presence is decided by koanf's Exists so a stringified
+// "false" isn't mistaken for absence.
+//
+// An unparseable timeout returns a structured INVALID_FLAG error
+// rather than silently falling back to the pflag default.
+func backfillFlags(f *Flags, pfs *pflag.FlagSet, merged *koanf.Koanf) error {
 	if !pfs.Changed("output") {
 		if v := merged.String("output"); v != "" {
 			f.Output = v
@@ -252,23 +261,26 @@ func backfillFlags(f *Flags, pfs *pflag.FlagSet, merged *koanf.Koanf) {
 			f.LogLevel = v
 		}
 	}
-	if !pfs.Changed("timeout") {
-		if v := merged.String("timeout"); v != "" {
-			if d, err := time.ParseDuration(v); err == nil {
-				f.Timeout = d
+	if !pfs.Changed("timeout") && merged.Exists("timeout") {
+		v := merged.String("timeout")
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return &output.Error{
+				Code:     output.ErrCodeInvalidFlag,
+				Message:  fmt.Sprintf("invalid timeout %q: %v", v, err),
+				ExitCode: output.ExitUserError,
+				Cause:    err,
 			}
 		}
+		f.Timeout = d
 	}
-	if !pfs.Changed("yes") {
-		if v := merged.String("yes"); v != "" {
-			f.Yes = merged.Bool("yes")
-		}
+	if !pfs.Changed("yes") && merged.Exists("yes") {
+		f.Yes = merged.Bool("yes")
 	}
-	if !pfs.Changed("dry-run") {
-		if v := merged.String("dry-run"); v != "" {
-			f.DryRun = merged.Bool("dry-run")
-		}
+	if !pfs.Changed("dry-run") && merged.Exists("dry-run") {
+		f.DryRun = merged.Bool("dry-run")
 	}
+	return nil
 }
 
 // retryCondition enforces the contract-mandated retry policy: GET and

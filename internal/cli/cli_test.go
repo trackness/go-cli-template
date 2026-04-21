@@ -226,6 +226,31 @@ func TestRun_Env_LogLevel_KeyUsesDashes(t *testing.T) {
 	}
 }
 
+func TestRun_Env_InvalidTimeout_Errors(t *testing.T) {
+	isolatedEnv(t)
+	t.Setenv("GO_CLI_TEMPLATE_TIMEOUT", "not-a-duration")
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(
+		context.Background(),
+		cli.BuildInfo{Version: "test-v0.0.0"},
+		[]string{"version"},
+		&stdout,
+		&stderr,
+	)
+
+	if code != output.ExitUserError {
+		t.Errorf("exit code = %d, want %d (stderr=%q)", code, output.ExitUserError, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout non-empty: %q", stdout.String())
+	}
+	env := parseErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != output.ErrCodeInvalidFlag {
+		t.Errorf("error.code = %q, want %q", env.Error.Code, output.ErrCodeInvalidFlag)
+	}
+}
+
 func TestRun_Commands_Groups_HumanOutputFalse(t *testing.T) {
 	isolatedEnv(t)
 
