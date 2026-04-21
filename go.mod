@@ -12,6 +12,7 @@ require (
 	github.com/knadh/koanf/v2 v2.3.4
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
+	go.uber.org/goleak v1.3.0
 	golang.org/x/term v0.42.0
 )
 

@@ -17,6 +17,10 @@ import (
 // by cli_test.go. Duplicated because internal-package tests need it
 // for scenarios external-package tests cannot cover (constructing
 // commands with unexported annotation keys).
+//
+// Callers may t.Setenv specific GO_CLI_TEMPLATE_* values AFTER calling
+// sterilizeEnv; t.Setenv overwrites freely, and envKeyTransform drops
+// empty values, so the pattern is safe in either order.
 func sterilizeEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())

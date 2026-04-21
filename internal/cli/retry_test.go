@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -9,7 +10,9 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
+	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"go.uber.org/goleak"
 
 	"github.com/example/go-cli-template/internal/output"
 )
@@ -357,6 +360,118 @@ func TestInvalidTimeout_Errors(t *testing.T) {
 	}
 	if oe.Code != output.ErrCodeInvalidFlag {
 		t.Errorf("code = %q, want %q", oe.Code, output.ErrCodeInvalidFlag)
+	}
+}
+
+// newFetchCmd returns a test-only leaf that makes a single GET
+// through deps.Resty and surfaces the resty error (if any) as the
+// command's RunE return. Used to exercise full-pipeline paths
+// (PersistentPreRunE → buildDeps → backfill → resty request) in
+// situations where calling buildDeps directly would skip
+// command-tree concerns like env backfill. Returning the error means
+// tests can assert on transport failures via writeErrorAndExit's
+// structured envelope rather than only via handler side-effects.
+func newFetchCmd(baseURL string) *cobra.Command {
+	return &cobra.Command{
+		Use: "test-fetch",
+		RunE: func(c *cobra.Command, _ []string) error {
+			deps := depsFromContext(c.Context())
+			deps.Resty.SetBaseURL(baseURL)
+			_, err := deps.Resty.R().Get("/")
+			return err
+		},
+	}
+}
+
+func TestNoRetry_EnvBackfill_DisablesRetry(t *testing.T) {
+	// F3: --no-retry via env must travel flag>env>file>default
+	// backfill onto Flags.NoRetry and reach the resty client. The
+	// existing TestNoRetryFlag_DisablesRetry constructs Flags
+	// directly, bypassing this path.
+	sterilizeEnv(t)
+	t.Setenv("GO_CLI_TEMPLATE_NO_RETRY", "true")
+
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(BuildInfo{Version: "test-v0.0.0"}, &stdout, &stderr)
+	cmd.AddCommand(newFetchCmd(srv.URL))
+
+	code := runCmdTree(context.Background(), cmd, []string{"test-fetch"})
+	if code != output.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d (stderr=%q)", code, output.ExitSuccess, stderr.String())
+	}
+	if calls != 1 {
+		t.Errorf("handler calls = %d, want 1 (--no-retry from env must reach resty)", calls)
+	}
+}
+
+func TestRunCmdTree_NoGoroutineLeak_HappyPath(t *testing.T) {
+	// F4: context.WithTimeout installed by PersistentPreRunE must be
+	// released on the success path. goleak snapshots goroutines at
+	// test start and fails if any created during the test remain
+	// alive.
+	defer goleak.VerifyNone(t)
+
+	sterilizeEnv(t)
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(BuildInfo{Version: "test-v0.0.0"}, &stdout, &stderr)
+	code := runCmdTree(context.Background(), cmd, []string{"version"})
+	if code != output.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d (stderr=%q)", code, output.ExitSuccess, stderr.String())
+	}
+}
+
+func TestRunCmdTree_NoGoroutineLeak_ErrorPath(t *testing.T) {
+	// Error path — bare group triggers SUBCOMMAND_REQUIRED. Cancel
+	// must still fire.
+	defer goleak.VerifyNone(t)
+
+	sterilizeEnv(t)
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(BuildInfo{Version: "test-v0.0.0"}, &stdout, &stderr)
+	_ = runCmdTree(context.Background(), cmd, []string{})
+}
+
+func TestRunCmdTree_NoGoroutineLeak_PanicPath(t *testing.T) {
+	// Panic path — the recover deferred func must still fire cancel.
+	defer goleak.VerifyNone(t)
+
+	sterilizeEnv(t)
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(BuildInfo{Version: "test-v0.0.0"}, &stdout, &stderr)
+	cmd.AddCommand(&cobra.Command{
+		Use: "test-panic",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			panic("synthetic invariant")
+		},
+	})
+	_ = runCmdTree(context.Background(), cmd, []string{"test-panic"})
+}
+
+func TestRunCmdTree_NoGoroutineLeak_PersistentPreRunError(t *testing.T) {
+	// Belt-and-braces for the fourth exit path: PersistentPreRunE
+	// itself fails (here via an invalid --log-level from env) BEFORE
+	// the context.WithTimeout wrap is installed. No timer was ever
+	// created, so the cancelTimeout guard at runCmdTree's defer
+	// correctly no-ops. goleak locks the invariant — any future
+	// refactor that installs the timer before the validation error
+	// path would fail here rather than silently leak.
+	defer goleak.VerifyNone(t)
+
+	sterilizeEnv(t)
+	t.Setenv("GO_CLI_TEMPLATE_LOG_LEVEL", "not-a-level")
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(BuildInfo{Version: "test-v0.0.0"}, &stdout, &stderr)
+	code := runCmdTree(context.Background(), cmd, []string{"version"})
+	if code != output.ExitUserError {
+		t.Errorf("exit code = %d, want %d (stderr=%q)", code, output.ExitUserError, stderr.String())
 	}
 }
 
