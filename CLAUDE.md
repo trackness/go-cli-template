@@ -340,6 +340,26 @@ stdout or stderr.
   part of the versioned output contract — skills may branch on the
   literal to distinguish "value present but hidden" from "value
   absent". Changing the placeholder is a major-version bump.
+- **Type substitution.** `RedactValue` always returns the `Redacted`
+  string, regardless of the original value's type. A descendant that
+  marks a non-string config key (int, bool) as sensitive by appending
+  its suffix to `SensitiveSuffixes` will see the JSON field change
+  type in `config view` output (e.g. `42` → `"<redacted>"`). Declare
+  such fields as `any` / union in skill-side schemas, or reserve the
+  sensitive set for string-valued keys.
+- **Known limitation.** Curl redaction is split-based on ` -H ` and
+  line-based on tab-indented dump headers. A sensitive header value
+  containing the literal byte sequence ` -H ` is adversarial input
+  that would fragment the split and leak; not realistic for tokens
+  and cookies encountered in practice, documented here so descendants
+  writing novel debug paths don't assume full coverage.
+- **Mutability.** `SensitiveKeys`, `SensitiveSuffixes`, and
+  `SensitiveHeaders` are package-level `var` slices. Append only
+  during process startup (before the first call to `cli.Run`).
+  Concurrent append + read is a data race; the template's
+  single-goroutine startup avoids it, but descendants embedding
+  `internal/output` in servers or parallel tests must lock or
+  restrict to init-time writes.
 
 ## Concurrency
 

@@ -39,6 +39,10 @@ var SensitiveSuffixes = []string{
 // rendered curl debug output, regardless of whether their suffix
 // matches SensitiveSuffixes. Comparison is case-insensitive.
 // Descendants extend by appending.
+//
+// set-cookie is a response-only header; it is listed here so that
+// future response-logging paths (if added) cover it by default
+// without each descendant remembering to add it.
 var SensitiveHeaders = []string{
 	"authorization",
 	"proxy-authorization",
@@ -92,25 +96,96 @@ func RedactValue(key string, v any) any {
 	return v
 }
 
-// curlHeaderRE matches a single curl -H argument in either quoting
-// style. Submatches: 1=prefix up to opening quote, 2=header name,
-// 3=separator (: and any spaces), 4=header value, 5=closing quote.
-var curlHeaderRE = regexp.MustCompile(`(-H\s*['"])([A-Za-z0-9_-]+)(:\s*)([^'"]*)(['"])`)
+// dumpHeaderRE matches the tab-indented "Name: value" lines resty
+// emits inside the REQUEST dump block (distinct from the curl line).
+// Without this pass the dump leaks secrets even when the curl line is
+// scrubbed. Applied with (?m) so ^/$ anchor to line boundaries inside
+// the multi-line Debugf payload.
+var dumpHeaderRE = regexp.MustCompile(`(?m)^(\t)([A-Za-z0-9_-]+)(:\s*)(.*)$`)
 
-// RedactCurl rewrites a curl command string so that the values of
+// RedactCurl rewrites resty's debug output so that the values of
 // sensitive HTTP headers (Authorization, Cookie, anything matching
-// IsSensitiveHeader) become Redacted. Non-sensitive headers and the
-// rest of the curl command are passed through unchanged. Used by the
-// slog/resty logger adapter to scrub debug curl dumps before they
-// reach stderr.
+// IsSensitiveHeader) become Redacted. Two passes:
+//
+//  1. The curl line itself — `-H '<name>: <value>'` or `-H "<name>: <value>"`.
+//     Split-based (not regex) so shell-escaped quote sequences like
+//     '"'"' inside the value don't truncate redaction at the first
+//     embedded quote. Known limitation: a value containing the literal
+//     " -H " byte sequence would fragment the split and leak;
+//     pathological-input territory, documented in CLAUDE.md.
+//  2. The REQUEST dump's HEADERS block — tab-indented `Name: value`
+//     lines. Resty's EnableGenerateCurlOnDebug emits these alongside
+//     the curl line; without this pass the token ships to stderr twice
+//     (once curl-formatted, once dump-formatted).
+//
+// Non-sensitive headers and the rest of the dump pass through unchanged.
 func RedactCurl(s string) string {
-	return curlHeaderRE.ReplaceAllStringFunc(s, func(match string) string {
-		parts := curlHeaderRE.FindStringSubmatch(match)
-		if len(parts) < 6 {
+	s = redactCurlHFlags(s)
+	s = redactDumpHeaders(s)
+	return s
+}
+
+// redactCurlHFlags walks the curl command's -H arguments by splitting
+// on " -H " rather than regex-matching. This handles shell-escaped
+// quote sequences inside values (e.g. `'"'"'`) which defeat a
+// quote-anchored regex.
+func redactCurlHFlags(s string) string {
+	parts := strings.Split(s, " -H ")
+	if len(parts) < 2 {
+		return s
+	}
+	for i := 1; i < len(parts); i++ {
+		parts[i] = redactOneHArg(parts[i])
+	}
+	return strings.Join(parts, " -H ")
+}
+
+// redactOneHArg redacts one `'<name>: <value>'` argument (or
+// "<name>: <value>") if name is sensitive. Scans from the END of the
+// piece for the outer closing quote: a quote character followed by
+// whitespace or end-of-string is the true close, regardless of how
+// many shell-escape quote sequences precede it.
+func redactOneHArg(piece string) string {
+	if len(piece) < 2 {
+		return piece
+	}
+	opener := piece[0]
+	if opener != '\'' && opener != '"' {
+		return piece
+	}
+	rel := strings.IndexByte(piece[1:], ':')
+	if rel < 1 {
+		return piece
+	}
+	colonIdx := rel + 1
+	name := piece[1:colonIdx]
+	if !IsSensitiveHeader(name) {
+		return piece
+	}
+	closeIdx := -1
+	for i := len(piece) - 1; i > colonIdx; i-- {
+		if piece[i] == opener && (i == len(piece)-1 || piece[i+1] == ' ' || piece[i+1] == '\t') {
+			closeIdx = i
+			break
+		}
+	}
+	if closeIdx == -1 {
+		return piece
+	}
+	return string(opener) + name + ": " + Redacted + string(opener) + piece[closeIdx+1:]
+}
+
+// redactDumpHeaders rewrites tab-indented "Name: value" lines in
+// resty's REQUEST dump so that sensitive headers carry only the
+// placeholder.
+func redactDumpHeaders(s string) string {
+	return dumpHeaderRE.ReplaceAllStringFunc(s, func(match string) string {
+		parts := dumpHeaderRE.FindStringSubmatch(match)
+		if len(parts) < 5 {
 			return match
 		}
 		if IsSensitiveHeader(parts[2]) {
-			return parts[1] + parts[2] + parts[3] + Redacted + parts[5]
+			return parts[1] + parts[2] + parts[3] + Redacted
 		}
 		return match
 	})

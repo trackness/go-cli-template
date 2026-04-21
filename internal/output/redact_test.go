@@ -1,6 +1,7 @@
 package output_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/example/go-cli-template/internal/output"
@@ -80,23 +81,21 @@ func TestIsSensitiveHeader(t *testing.T) {
 func TestRedactCurl_AuthorizationHeaderRedacted(t *testing.T) {
 	in := `curl -X GET 'http://api.example.com' -H 'Authorization: Bearer abc123secret' -H 'User-Agent: test/1.0'`
 	got := output.RedactCurl(in)
-	if contains(got, "abc123secret") {
+	if strings.Contains(got, "abc123secret") {
 		t.Errorf("secret token leaked: %q", got)
 	}
-	if !contains(got, output.Redacted) {
+	if !strings.Contains(got, output.Redacted) {
 		t.Errorf("redacted placeholder missing: %q", got)
 	}
-	// Non-sensitive header must remain intact.
-	if !contains(got, "User-Agent: test/1.0") {
+	if !strings.Contains(got, "User-Agent: test/1.0") {
 		t.Errorf("non-sensitive header lost: %q", got)
 	}
 }
 
 func TestRedactCurl_DoubleQuotedHeader(t *testing.T) {
-	// Some curl generators use double quotes; redaction must cope.
 	in := `curl -X POST "http://x" -H "X-API-Token: xyz123"`
 	got := output.RedactCurl(in)
-	if contains(got, "xyz123") {
+	if strings.Contains(got, "xyz123") {
 		t.Errorf("secret leaked: %q", got)
 	}
 }
@@ -109,19 +108,44 @@ func TestRedactCurl_NonSensitiveHeaders_PassThrough(t *testing.T) {
 	}
 }
 
-// contains is a small helper to keep assertions readable; avoids
-// importing strings into test just for one substring check per case.
-func contains(haystack, needle string) bool {
-	return len(haystack) >= len(needle) && indexOf(haystack, needle) >= 0
+func TestRedactCurl_ShellEscapedQuoteInValue(t *testing.T) {
+	// A Bearer token containing a literal single-quote is legal and
+	// gets shell-escaped by resty as ' closed, " open, ' char, " close,
+	// ' reopen. The regex-based approach stopped at the first quote
+	// and leaked the tail; the split-based approach redacts the whole
+	// value regardless of embedded escape sequences.
+	in := `curl -X GET 'http://x' -H 'Authorization: Bearer pre'"'"'post'`
+	got := output.RedactCurl(in)
+	if strings.Contains(got, "pre") || strings.Contains(got, "post") {
+		t.Errorf("partial leak — expected both halves of shell-escaped secret redacted: %q", got)
+	}
+	if !strings.Contains(got, output.Redacted) {
+		t.Errorf("redacted placeholder missing: %q", got)
+	}
 }
 
-func indexOf(haystack, needle string) int {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return i
-		}
+func TestRedactCurl_RestyDumpHeadersBlock(t *testing.T) {
+	// Resty's EnableGenerateCurlOnDebug emits the curl line PLUS a
+	// REQUEST dump whose HEADERS block reprints every header tab-
+	// indented. The curl redaction alone misses this second leak.
+	in := "~~~ REQUEST(CURL) ~~~\n" +
+		"\tcurl -X GET -H 'Authorization: Bearer SECRET_TOKEN' http://x\n" +
+		"~~~ REQUEST ~~~\n" +
+		"GET  /  HTTP/1.1\n" +
+		"HEADERS:\n" +
+		"\tAuthorization: Bearer SECRET_TOKEN\n" +
+		"\tCookie: session=ABC123\n" +
+		"\tUser-Agent: test/1.0\n"
+	got := output.RedactCurl(in)
+	if strings.Contains(got, "SECRET_TOKEN") {
+		t.Errorf("secret leaked through dump block: %q", got)
 	}
-	return -1
+	if strings.Contains(got, "ABC123") {
+		t.Errorf("cookie value leaked through dump block: %q", got)
+	}
+	if !strings.Contains(got, "User-Agent: test/1.0") {
+		t.Errorf("non-sensitive dump header lost: %q", got)
+	}
 }
 
 // TestSensitiveKeys_Extendable ensures descendants can append their own

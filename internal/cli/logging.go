@@ -16,11 +16,11 @@ type slogRestyLogger struct {
 }
 
 func (l *slogRestyLogger) Errorf(format string, v ...any) {
-	l.Error(fmt.Sprintf(format, v...))
+	l.Error(output.RedactCurl(fmt.Sprintf(format, v...)))
 }
 
 func (l *slogRestyLogger) Warnf(format string, v ...any) {
-	l.Warn(fmt.Sprintf(format, v...))
+	l.Warn(output.RedactCurl(fmt.Sprintf(format, v...)))
 }
 
 func (l *slogRestyLogger) Debugf(format string, v ...any) {
