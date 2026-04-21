@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"os"
 	"sort"
 
 	"github.com/spf13/cobra"
@@ -28,7 +27,8 @@ func newConfigViewCommand() *cobra.Command {
 		Use:   "view",
 		Short: "Emit resolved config with per-value source attribution",
 		Annotations: map[string]string{
-			annotationIdempotent: "true",
+			annotationMachineOnly: "true",
+			annotationIdempotent:  "true",
 		},
 		RunE: func(c *cobra.Command, _ []string) error {
 			deps := depsFromContext(c.Context())
@@ -39,7 +39,7 @@ func newConfigViewCommand() *cobra.Command {
 					ExitCode: output.ExitUserError,
 				}
 			}
-			return output.WriteJSON(os.Stdout, buildConfigView(deps.Config, deps.Flags.configSource))
+			return output.WriteJSON(deps.Stdout, buildConfigView(deps.Config, deps.Flags.configSource))
 		},
 	}
 }

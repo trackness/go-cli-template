@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -69,7 +70,9 @@ type Flags struct {
 }
 
 // Deps is the bag of shared dependencies constructed in
-// PersistentPreRunE and stored in the command's context.
+// PersistentPreRunE and stored in the command's context. Stdout and
+// Stderr are the writers threaded through from Run so commands (and
+// tests) never touch os.Stdout/os.Stderr directly.
 type Deps struct {
 	Flags  *Flags
 	Build  BuildInfo
@@ -77,6 +80,8 @@ type Deps struct {
 	HTTP   *http.Client
 	Resty  *resty.Client
 	Config *ConfigLayers
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
 // ConfigLayers holds each source's koanf instance separately so that
@@ -92,10 +97,11 @@ type ConfigLayers struct {
 
 type depsKey struct{}
 
-// Run builds the root command and executes it against args. Intended
-// to be invoked from main; returns the process exit code.
-func Run(ctx context.Context, bi BuildInfo, args []string) output.ExitCode {
-	cmd := NewRoot(bi)
+// Run builds the root command and executes it against args. stdout and
+// stderr are threaded through to subcommands via Deps; pass os.Stdout
+// and os.Stderr from main, bytes.Buffer from tests.
+func Run(ctx context.Context, bi BuildInfo, args []string, stdout, stderr io.Writer) output.ExitCode {
+	cmd := NewRoot(bi, stdout, stderr)
 	cmd.SetArgs(args)
 	cmd.SetContext(ctx)
 	if err := cmd.Execute(); err != nil {
@@ -105,8 +111,10 @@ func Run(ctx context.Context, bi BuildInfo, args []string) output.ExitCode {
 }
 
 // NewRoot builds the cobra command tree. Exported so tests can drive
-// individual subcommands without invoking os.Exit.
-func NewRoot(bi BuildInfo) *cobra.Command {
+// individual subcommands without invoking os.Exit. stdout and stderr
+// are routed to Deps.Stdout / Deps.Stderr and (for cobra's own help and
+// error output) via cmd.SetOut / cmd.SetErr.
+func NewRoot(bi BuildInfo, stdout, stderr io.Writer) *cobra.Command {
 	flags := &Flags{}
 
 	cmd := &cobra.Command{
@@ -123,10 +131,18 @@ func NewRoot(bi BuildInfo) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			deps.Stdout = stdout
+			deps.Stderr = stderr
 			c.SetContext(context.WithValue(c.Context(), depsKey{}, deps))
 			return nil
 		},
+		RunE: subcommandRequiredRunE,
 	}
+	// Route cobra's help and usage to stderr; stdout is reserved for
+	// command output. SetErr is explicit so writeErrorAndExit can read
+	// cmd.ErrOrStderr() regardless of whether cobra is also writing.
+	cmd.SetOut(stderr)
+	cmd.SetErr(stderr)
 	registerPersistentFlags(cmd, flags)
 
 	cmd.AddCommand(newVersionCommand())
@@ -158,8 +174,33 @@ func depsFromContext(ctx context.Context) *Deps {
 }
 
 func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
-	// Logger — slog text handler to stderr. All logs go to stderr
-	// regardless of output mode; stdout is reserved for command output.
+	// 1. Load config layers (precedence: flag > env > file > default).
+	layers, err := loadConfig(f, pfs)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Backfill *Flags fields from the merged layers when pflag did
+	//    not explicitly set them. Realises the documented precedence on
+	//    the struct commands read from. --config itself is not
+	//    backfilled (resolveConfigPath already consumed it).
+	if err := backfillFlags(f, pfs, layers.Merged); err != nil {
+		return nil, err
+	}
+
+	// 3. Validate --output on the final resolved value. An unsupported
+	//    mode fails fast with a stable code rather than silently
+	//    falling through to default JSON.
+	if f.Output != "json" && f.Output != "human" {
+		return nil, &output.Error{
+			Code:     output.ErrCodeInvalidOutputMode,
+			Message:  fmt.Sprintf("invalid --output %q (want json or human)", f.Output),
+			ExitCode: output.ExitUserError,
+		}
+	}
+
+	// 4. Logger — slog text handler to stderr. All logs go to stderr
+	//    regardless of output mode; stdout is reserved for command output.
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(f.LogLevel)); err != nil {
 		return nil, &output.Error{
@@ -171,8 +212,8 @@ func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	// HTTP + resty. Explicit *http.Client, per CLAUDE.md "HTTP client":
-	// never resty.New() with defaults.
+	// 5. HTTP + resty. Explicit *http.Client, per CLAUDE.md "HTTP client":
+	//    never resty.New() with defaults.
 	httpClient := &http.Client{Timeout: f.Timeout}
 	r := resty.NewWithClient(httpClient).
 		SetHeader("User-Agent", fmt.Sprintf("%s/%s", cliName, bi.Version)).
@@ -184,12 +225,6 @@ func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
 		r.EnableGenerateCurlOnDebug()
 	}
 
-	// Config layers (precedence: flag > env > file > default).
-	layers, err := loadConfig(f, pfs)
-	if err != nil {
-		return nil, err
-	}
-
 	return &Deps{
 		Flags:  f,
 		Build:  bi,
@@ -198,6 +233,52 @@ func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
 		Resty:  r,
 		Config: layers,
 	}, nil
+}
+
+// backfillFlags copies resolved values from the merged config layers
+// onto f for any flag the user did not explicitly set on the command
+// line. --config is deliberately skipped because resolveConfigPath
+// already consumed it.
+//
+// For strings, empty values in the merged layers are treated as unset
+// (the env transform already filters exported-but-blank env vars; this
+// handles the same case arriving from a config file). For bools and
+// durations, presence is decided by koanf's Exists so a stringified
+// "false" isn't mistaken for absence.
+//
+// An unparseable timeout returns a structured INVALID_FLAG error
+// rather than silently falling back to the pflag default.
+func backfillFlags(f *Flags, pfs *pflag.FlagSet, merged *koanf.Koanf) error {
+	if !pfs.Changed("output") {
+		if v := merged.String("output"); v != "" {
+			f.Output = v
+		}
+	}
+	if !pfs.Changed("log-level") {
+		if v := merged.String("log-level"); v != "" {
+			f.LogLevel = v
+		}
+	}
+	if !pfs.Changed("timeout") && merged.Exists("timeout") {
+		v := merged.String("timeout")
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return &output.Error{
+				Code:     output.ErrCodeInvalidFlag,
+				Message:  fmt.Sprintf("invalid timeout %q: %v", v, err),
+				ExitCode: output.ExitUserError,
+				Cause:    err,
+			}
+		}
+		f.Timeout = d
+	}
+	if !pfs.Changed("yes") && merged.Exists("yes") {
+		f.Yes = merged.Bool("yes")
+	}
+	if !pfs.Changed("dry-run") && merged.Exists("dry-run") {
+		f.DryRun = merged.Bool("dry-run")
+	}
+	return nil
 }
 
 // retryCondition enforces the contract-mandated retry policy: GET and
@@ -286,10 +367,21 @@ func loadConfig(f *Flags, pfs *pflag.FlagSet) (*ConfigLayers, error) {
 	}, nil
 }
 
-// envKeyTransform maps GO_CLI_TEMPLATE_FOO_BAR → foo.bar.
+// envKeyTransform maps GO_CLI_TEMPLATE_FOO_BAR → foo-bar. Keys are
+// flat with dashes to align with pflag's posflag provider: the env and
+// flag layers then share a single namespace so merge precedence works.
+// Nested-config env mapping is deliberately out of scope; descendant
+// repos that need it add their own mapper.
+//
+// Empty values are skipped (returning an empty key tells the koanf env
+// provider to drop the entry). This treats `VAR=""` as "unset" so an
+// exported-but-blank env var does not clobber a pflag default.
 func envKeyTransform(k, v string) (string, any) {
+	if v == "" {
+		return "", nil
+	}
 	k = strings.TrimPrefix(k, envVarPrefix)
-	return strings.ReplaceAll(strings.ToLower(k), "_", "."), v
+	return strings.ReplaceAll(strings.ToLower(k), "_", "-"), v
 }
 
 // resolveConfigPath applies the discovery rule from CLAUDE.md. The
@@ -335,20 +427,110 @@ func resolveConfigPath(pfs *pflag.FlagSet, explicit string) (path, source string
 	return "", "none"
 }
 
-// writeErrorAndExit renders err to stderr in the current output mode
-// and returns the process exit code. Best-effort mode detection: if the
-// --output flag has been parsed, use its value; otherwise fall back to
-// JSON (skills never assume human).
-func writeErrorAndExit(cmd *cobra.Command, err error) output.ExitCode {
-	mode := "json"
-	if f := cmd.Root().PersistentFlags().Lookup("output"); f != nil {
-		mode = f.Value.String()
+// subcommandRequiredError is the error returned when a command group
+// (root, `config`, etc.) is invoked without a subcommand. Skills branch
+// on ErrCodeSubcommandRequired to know to re-dispatch with one.
+func subcommandRequiredError(path string) *output.Error {
+	return &output.Error{
+		Code:     output.ErrCodeSubcommandRequired,
+		Message:  fmt.Sprintf("%q requires a subcommand; see %q --help", path, path),
+		ExitCode: output.ExitUserError,
 	}
-	output.WriteError(os.Stderr, mode, err)
+}
 
+// subcommandRequiredRunE is the shared RunE for any command group —
+// root, `config`, and any future non-leaf command. Consolidates what
+// would otherwise be two inline closures with the same body.
+func subcommandRequiredRunE(c *cobra.Command, _ []string) error {
+	return subcommandRequiredError(c.CommandPath())
+}
+
+// newGroupCommand constructs a cobra.Command for a command group — a
+// non-leaf command that exists only to hold subcommands. Bare
+// invocation of the group errors with SUBCOMMAND_REQUIRED rather than
+// dumping help to stdout.
+func newGroupCommand(use, short string) *cobra.Command {
+	return &cobra.Command{
+		Use:   use,
+		Short: short,
+		RunE:  subcommandRequiredRunE,
+	}
+}
+
+// writeErrorAndExit renders err to the command's configured stderr in
+// the current output mode and returns the process exit code. Best-
+// effort mode detection: if the --output flag has been parsed, use its
+// value; otherwise fall back to JSON (skills never assume human).
+func writeErrorAndExit(cmd *cobra.Command, err error) output.ExitCode {
+	mode := resolveErrorMode(cmd)
+
+	// Cobra surfaces "unknown flag" and "unknown command" as plain
+	// errors without typed sentinels. Map them to stable codes by
+	// message prefix before rendering so skills branch on a code rather
+	// than reading prose. Skip the mapping when err is already
+	// structured — the mapper assumes an unstructured input.
 	var oe *output.Error
+	if !errors.As(err, &oe) {
+		if mapped := mapCobraNativeError(err); mapped != nil {
+			err = mapped
+		}
+	}
+
+	output.WriteError(cmd.ErrOrStderr(), mode, err)
+
 	if errors.As(err, &oe) {
 		return oe.ExitCode
 	}
 	return output.ExitUserError
+}
+
+// resolveErrorMode picks the output mode to render an error with when
+// writeErrorAndExit is invoked. Precedence matches the resolved config
+// precedence (flag > env > default) but avoids touching Deps because
+// PersistentPreRunE may not have run (e.g. pflag parse failed before
+// buildDeps could resolve anything). Values other than json or human
+// from either source fall through to json — invalid user input never
+// dictates error rendering.
+func resolveErrorMode(cmd *cobra.Command) string {
+	if f := cmd.Root().PersistentFlags().Lookup("output"); f != nil && f.Changed {
+		if v := f.Value.String(); v == "json" || v == "human" {
+			return v
+		}
+	}
+	if v := os.Getenv(envVarPrefix + "OUTPUT"); v == "json" || v == "human" {
+		return v
+	}
+	return "json"
+}
+
+// mapCobraNativeError matches cobra's unstructured flag/command errors
+// by message prefix and wraps them in *output.Error with a stable
+// code. Returns nil when no prefix matches. Caller (writeErrorAndExit)
+// guarantees err is not already a *output.Error.
+//
+// Coverage is deliberately narrow — only the cobra/pflag errors skills
+// commonly branch on are mapped. Other pflag typed errors
+// (ValueRequiredError, InvalidValueError, InvalidSyntaxError) fall
+// through to UNKNOWN; extend here if a skill needs to distinguish
+// them. Locked against upstream message-wording drift by
+// TestMapCobraNativeError_KnownPrefixes.
+func mapCobraNativeError(err error) *output.Error {
+	msg := err.Error()
+	switch {
+	case strings.HasPrefix(msg, "unknown flag:"),
+		strings.HasPrefix(msg, "unknown shorthand flag:"),
+		strings.HasPrefix(msg, "flag provided but not defined:"):
+		return &output.Error{
+			Code:     output.ErrCodeInvalidFlag,
+			Message:  msg,
+			ExitCode: output.ExitUserError,
+		}
+	case strings.HasPrefix(msg, "unknown command"):
+		return &output.Error{
+			Code:     output.ErrCodeUnknownCommand,
+			Message:  msg,
+			ExitCode: output.ExitUserError,
+		}
+	}
+	return nil
 }

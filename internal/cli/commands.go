@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"os"
 	"sort"
 
 	"github.com/spf13/cobra"
@@ -60,7 +59,7 @@ func newCommandsCommand(root *cobra.Command) *cobra.Command {
 					ExitCode: output.ExitUserError,
 				}
 			}
-			return output.WriteJSON(os.Stdout, walkCommands(root))
+			return output.WriteJSON(deps.Stdout, walkCommands(root))
 		},
 	}
 }
@@ -73,10 +72,13 @@ func walkCommands(root *cobra.Command) CommandsOutput {
 			return
 		}
 		entries = append(entries, CommandEntry{
-			Path:        path,
-			Short:       cmd.Short,
-			Flags:       collectFlags(cmd),
-			HumanOutput: cmd.Annotations[annotationMachineOnly] != "true",
+			Path:  path,
+			Short: cmd.Short,
+			Flags: collectFlags(cmd),
+			// Groups (commands with subcommands) never render human
+			// output — they dispatch or error with SUBCOMMAND_REQUIRED.
+			// Leaves render unless explicitly annotated machine-only.
+			HumanOutput: !cmd.HasSubCommands() && cmd.Annotations[annotationMachineOnly] != "true",
 			Idempotent:  cmd.Annotations[annotationIdempotent] == "true",
 		})
 		children := append([]*cobra.Command(nil), cmd.Commands()...)
@@ -136,8 +138,11 @@ func errorCodeList() []string {
 		output.ErrCodeHumanOutputNotSupported,
 		output.ErrCodeInvalidFlag,
 		output.ErrCodeInvalidLogLevel,
+		output.ErrCodeInvalidOutputMode,
 		output.ErrCodeMalformedConfigFile,
 		output.ErrCodeMissingRequiredValue,
+		output.ErrCodeSubcommandRequired,
 		output.ErrCodeUnknown,
+		output.ErrCodeUnknownCommand,
 	}
 }

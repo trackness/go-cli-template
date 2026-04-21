@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -35,10 +34,10 @@ func newVersionCommand() *cobra.Command {
 				if deps.Build.Commit != "" || deps.Build.Date != "" {
 					line += fmt.Sprintf(" (%s %s)", deps.Build.Commit, deps.Build.Date)
 				}
-				_, _ = fmt.Fprintln(os.Stdout, line)
+				_, _ = fmt.Fprintln(deps.Stdout, line)
 				return nil
 			}
-			return output.WriteJSON(os.Stdout, out)
+			return output.WriteJSON(deps.Stdout, out)
 		},
 	}
 }

@@ -27,6 +27,8 @@ func main() {
 		context.Background(),
 		cli.BuildInfo{Version: version, Commit: commit, Date: date},
 		os.Args[1:],
+		os.Stdout,
+		os.Stderr,
 	)
 	os.Exit(int(code))
 }
