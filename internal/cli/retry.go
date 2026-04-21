@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
@@ -87,34 +88,38 @@ func retryAfter(_ *resty.Client, resp *resty.Response) (time.Duration, error) {
 }
 
 // parseRetryAfter accepts both delta-seconds and HTTP-date forms per
-// RFC 7231 §7.1.3. A past HTTP-date returns 0 (retry immediately).
-// Garbage input returns an error so the caller can fall through to
-// the computed backoff rather than treat it as zero wait.
+// RFC 7231 §7.1.3. A past HTTP-date or negative delta-seconds returns
+// 0 (retry immediately). Garbage input returns an error that carries
+// both the Atoi and ParseTime failures so the caller can diagnose at
+// debug level rather than treating the header as zero wait.
 func parseRetryAfter(raw string) (time.Duration, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return 0, fmt.Errorf("empty Retry-After")
 	}
-	if n, err := strconv.Atoi(raw); err == nil {
+	n, atoiErr := strconv.Atoi(raw)
+	if atoiErr == nil {
 		if n < 0 {
 			return 0, nil
 		}
 		return time.Duration(n) * time.Second, nil
 	}
-	if t, err := http.ParseTime(raw); err == nil {
+	t, parseErr := http.ParseTime(raw)
+	if parseErr == nil {
 		d := time.Until(t)
 		if d < 0 {
 			return 0, nil
 		}
 		return d, nil
 	}
-	return 0, fmt.Errorf("invalid Retry-After %q", raw)
+	return 0, fmt.Errorf("invalid Retry-After %q: %w", raw, errors.Join(atoiErr, parseErr))
 }
 
-// jitteredBackoff returns the wait duration before the Nth retry,
-// using exponential progression capped at retryMaxWait with ±20%
-// jitter. Attempt 1 is the wait after the first failed request and
-// returns the base wait (100ms ±20%).
+// jitteredBackoff returns the wait duration before the next retry.
+// attempt is 1-indexed against resty's Request.Attempt counter:
+// attempt=1 is the wait *after the first failed request* (i.e. before
+// the first retry) and evaluates to the base 100ms ±20%. attempt=2
+// doubles the base to 200ms ±20%, and so on, capped at retryMaxWait.
 func jitteredBackoff(attempt int) time.Duration {
 	if attempt < 1 {
 		attempt = 1

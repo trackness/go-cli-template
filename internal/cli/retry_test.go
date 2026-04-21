@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -99,24 +100,25 @@ func TestJitteredBackoff_CapsAt5s(t *testing.T) {
 }
 
 // newTestClient builds a minimal resty client hitting the given httptest
-// server and wired with our retryAfter hook. Used by the Retry-After
-// tests below.
+// server and wired with the same retry-related settings buildDeps
+// installs on the production client. Must mirror buildDeps so tests
+// exercise the real resty interaction, not a divergent harness config.
 func newTestClient(srv *httptest.Server) *resty.Client {
 	return resty.New().
 		SetBaseURL(srv.URL).
 		SetRetryCount(2).
-		SetRetryWaitTime(100 * time.Millisecond).
-		SetRetryMaxWaitTime(5 * time.Second).
+		SetRetryWaitTime(retryBaseWait).
+		SetRetryMaxWaitTime(retryAfterCap).
 		SetRetryAfter(retryAfter).
 		AddRetryCondition(retryCondition)
 }
 
 func TestRetryAfter_ServerValueWithinCap_Honoured(t *testing.T) {
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
 		if calls < 2 {
-			w.Header().Set("Retry-After", "1")
+			w.Header().Set("Retry-After", "2")
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
@@ -135,10 +137,63 @@ func TestRetryAfter_ServerValueWithinCap_Honoured(t *testing.T) {
 	if calls != 2 {
 		t.Errorf("handler calls = %d, want 2 (one retry)", calls)
 	}
-	// Honoured Retry-After=1 should have produced ≥ ~1s wait, not the
-	// computed backoff default (~100ms ±20%).
-	if elapsed := time.Since(start); elapsed < 800*time.Millisecond {
-		t.Errorf("elapsed = %v, want ≥ ~1s (Retry-After not honoured)", elapsed)
+	// Retry-After: 2 should produce ~2s wait; default computed backoff
+	// would be ~100-200ms. The 1500ms threshold cleanly discriminates
+	// while leaving 500ms of CI jitter headroom.
+	if elapsed := time.Since(start); elapsed < 1500*time.Millisecond {
+		t.Errorf("elapsed = %v, want ≥ 1.5s (Retry-After not honoured)", elapsed)
+	}
+}
+
+func TestRetryAfter_ServerValueBetweenComputedAndRetryAfterCap(t *testing.T) {
+	// A Retry-After value in the [5s, 10s] window must be honoured,
+	// not silently truncated to the computed-backoff cap (5s) by
+	// resty's SetRetryMaxWaitTime. Exercises the H1 fix.
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls < 2 {
+			w.Header().Set("Retry-After", "7")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	start := time.Now()
+	_, err := newTestClient(srv).R().Get("/")
+	if err != nil {
+		t.Fatalf("Get err = %v", err)
+	}
+	// Expect ≥ 6.5s wait, well above the old 5s truncation ceiling.
+	if elapsed := time.Since(start); elapsed < 6500*time.Millisecond {
+		t.Errorf("elapsed = %v, want ≥ 6.5s (Retry-After 7 truncated to ≤ 5s — H1 regression)", elapsed)
+	}
+}
+
+func TestRetryAfter_GarbageHeader_FallsThroughToBackoff(t *testing.T) {
+	// An unparseable Retry-After value must not abort retries; fall
+	// through to the computed backoff path.
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Retry-After", "hot-dog")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	start := time.Now()
+	_, _ = newTestClient(srv).R().Get("/")
+	elapsed := time.Since(start)
+
+	if calls != 3 {
+		t.Errorf("calls = %d, want 3 (parse fallback must still retry)", calls)
+	}
+	// Elapsed should reflect the computed-backoff path (~100 + ~200 ≈
+	// 300ms ±jitter), not a honoured Retry-After.
+	if elapsed > 2*time.Second {
+		t.Errorf("elapsed = %v, want computed-backoff (<2s); garbage header shouldn't have honoured anything", elapsed)
 	}
 }
 
@@ -228,8 +283,90 @@ func TestRetryAfter_ServerValueAboveCap_FailsFast(t *testing.T) {
 	if oe.ExitCode != output.ExitTargetError {
 		t.Errorf("exit code = %d, want %d", oe.ExitCode, output.ExitTargetError)
 	}
+	// Details payload is contract surface; skills branch on the
+	// stringified duration and cap, not prose.
+	if oe.Details["retry_after"] != "15s" {
+		t.Errorf("details.retry_after = %v, want %q", oe.Details["retry_after"], "15s")
+	}
+	if oe.Details["cap"] != "10s" {
+		t.Errorf("details.cap = %v, want %q", oe.Details["cap"], "10s")
+	}
 	// Fail-fast: should not have slept anywhere near 15s.
 	if elapsed > 2*time.Second {
 		t.Errorf("elapsed = %v, want fail-fast (< 2s) not wait for Retry-After", elapsed)
+	}
+}
+
+func TestRetryCondition_POSTNotRetried(t *testing.T) {
+	// retryCondition restricts retries to GET/HEAD. A POST that
+	// returns 503 must NOT be retried — the skill decides, not us.
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, _ = newTestClient(srv).R().Post("/")
+	if calls != 1 {
+		t.Errorf("POST handler calls = %d, want 1 (retryCondition must not retry non-idempotent methods)", calls)
+	}
+}
+
+func TestContextTimeout_BoundsRetryWindow(t *testing.T) {
+	// PersistentPreRunE wraps the command context with
+	// context.WithTimeout(ctx, f.Timeout). Resty's retry loop checks
+	// ctx.Err() between attempts and stops when the deadline passes.
+	// Simulate the PersistentPreRunE wrap directly here.
+	sterilizeEnv(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	flags := &Flags{Output: "json", LogLevel: "info", Timeout: 100 * time.Millisecond}
+	deps, err := buildDeps(BuildInfo{Version: "test"}, flags, newBuildDepsPflagSet())
+	if err != nil {
+		t.Fatalf("buildDeps: %v", err)
+	}
+	deps.Resty.SetBaseURL(srv.URL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), flags.Timeout)
+	defer cancel()
+
+	start := time.Now()
+	_, _ = deps.Resty.R().SetContext(ctx).Get("/")
+	elapsed := time.Since(start)
+
+	// Without context timeout, three attempts + backoff ≈ 300ms+.
+	// With 100ms timeout, the retry loop should bail within ~200ms.
+	if elapsed > 300*time.Millisecond {
+		t.Errorf("elapsed = %v, want context timeout to bound retries (≤ ~200ms)", elapsed)
+	}
+}
+
+func TestInvalidTimeout_Errors(t *testing.T) {
+	flags := &Flags{Output: "json", LogLevel: "info", Timeout: 0}
+	_, err := buildDeps(BuildInfo{Version: "test"}, flags, newBuildDepsPflagSet())
+	if err == nil {
+		t.Fatal("buildDeps returned nil, want INVALID_FLAG for --timeout 0")
+	}
+	var oe *output.Error
+	if !errors.As(err, &oe) {
+		t.Fatalf("err not *output.Error: %v", err)
+	}
+	if oe.Code != output.ErrCodeInvalidFlag {
+		t.Errorf("code = %q, want %q", oe.Code, output.ErrCodeInvalidFlag)
+	}
+}
+
+func TestParseRetryAfter_NegativeDelta_ReturnsZero(t *testing.T) {
+	d, err := parseRetryAfter("-5")
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if d != 0 {
+		t.Errorf("d = %v, want 0", d)
 	}
 }

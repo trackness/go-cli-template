@@ -241,6 +241,18 @@ func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
 		}
 	}
 
+	// 3a. Validate --timeout > 0. context.WithTimeout(ctx, 0) fires
+	//     ctx.Done() immediately, producing a silent single-attempt
+	//     near-immediate cancel. Reject rather than let the skill
+	//     diagnose a timeout from a transport error.
+	if f.Timeout <= 0 {
+		return nil, &output.Error{
+			Code:     output.ErrCodeInvalidFlag,
+			Message:  fmt.Sprintf("invalid --timeout %s (must be > 0)", f.Timeout),
+			ExitCode: output.ExitUserError,
+		}
+	}
+
 	// 4. Logger — slog text handler to stderr. All logs go to stderr
 	//    regardless of output mode; stdout is reserved for command output.
 	var level slog.Level
@@ -257,17 +269,24 @@ func buildDeps(bi BuildInfo, f *Flags, pfs *pflag.FlagSet) (*Deps, error) {
 	// 5. HTTP + resty. Explicit *http.Client, per CLAUDE.md "HTTP client":
 	//    never resty.New() with defaults.
 	httpClient := &http.Client{Timeout: f.Timeout}
+	retryCount := 2
+	if f.NoRetry {
+		retryCount = 0
+	}
 	r := resty.NewWithClient(httpClient).
 		SetHeader("User-Agent", fmt.Sprintf("%s/%s", cliName, bi.Version)).
-		SetRetryCount(2).
+		SetRetryCount(retryCount).
 		SetRetryWaitTime(retryBaseWait).
-		SetRetryMaxWaitTime(retryMaxWait).
+		// SetRetryMaxWaitTime bounds EVERY wait resty computes or
+		// accepts from our RetryAfter callback. It must be the
+		// Retry-After cap (10s), not the computed-backoff cap (5s),
+		// or resty silently truncates honoured Retry-After values in
+		// the [5s, 10s] window. jitteredBackoff enforces the 5s cap
+		// internally for the no-header path.
+		SetRetryMaxWaitTime(retryAfterCap).
 		AddRetryCondition(retryCondition).
 		SetRetryAfter(retryAfter).
 		SetLogger(&slogRestyLogger{Logger: logger})
-	if f.NoRetry {
-		r.SetRetryCount(0)
-	}
 	if level == slog.LevelDebug {
 		r.EnableGenerateCurlOnDebug()
 	}
