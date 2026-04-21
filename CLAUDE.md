@@ -58,9 +58,12 @@ Output is an API. Treat every change to output shape as a breaking change.
 - **Structured errors in default mode.** A single JSON object on stderr:
   `{"error": {"code": "<UPPER_SNAKE_CASE>", "message": "...", "details": {}}}`.
   Codes are stable across minor versions; adding a new code is additive.
-- **Non-interactive, always.** No prompts. Mutating commands require `--yes`
-  or `--dry-run`. If a TTY is not attached and input is missing, exit `1` with
-  a structured error — never block waiting on stdin.
+- **Non-interactive, always.** No prompts. Commands that mutate target
+  state carry the `<cli-name>/mutating` cobra annotation; the root
+  `PersistentPreRunE` rejects such invocations that supply neither
+  `--yes` nor `--dry-run` with `CONFIRMATION_REQUIRED` / exit `1`. A
+  TTY-less invocation with missing input exits the same way — never
+  block waiting on stdin.
 - **Paging discipline.** List commands default to a stated limit in `--help`.
   `--limit N` adjusts; `--all` is allowed with a stderr warning about output
   size. Never dump unbounded output to stdout by default.
