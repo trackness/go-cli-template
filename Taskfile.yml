@@ -1,0 +1,41 @@
+version: '3'
+
+vars:
+  CLI_NAME: go-cli-template
+
+tasks:
+  verify:
+    desc: Full verification loop (fix, format, vet, lint, test)
+    cmds:
+      - go fix ./...
+      - gofmt -s -w .
+      - go vet ./...
+      - golangci-lint run
+      - go test -race ./...
+
+  test:
+    desc: Run tests with race detector
+    cmds:
+      - go test -race ./...
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run
+
+  build:
+    desc: Build the CLI binary
+    cmds:
+      - go build -o dist/{{.CLI_NAME}} ./cmd/{{.CLI_NAME}}
+
+  release-snapshot:
+    desc: Dry-run the release pipeline locally (no publish)
+    cmds:
+      - goreleaser release --snapshot --clean
+
+  generate:
+    desc: Regenerate code (present only when codegen is opted in)
+    cmds:
+      - go generate ./...
+
+# --- per-repo tasks below ---

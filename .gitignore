@@ -1,0 +1,24 @@
+# build output
+dist/
+bin/
+
+# test artefacts
+*.out
+coverage.*
+*.cover
+*.profile
+
+# editor / IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# local env overrides
+.env
+.env.local
+
+# claude code local (per-developer; not template content)
+.claude/settings.local.json
+.claude/hooks/
