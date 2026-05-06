@@ -37,3 +37,6 @@ target facts live in [`PROJECT.md`](PROJECT.md).
     mock generation (per `CLAUDE.md` "Mocking / test doubles"), add a
     `generate` task to `Taskfile.yml` — the template does not ship one
     by default.
+11. Review `.claude/` — committed harness config (Claude Code hooks
+    and `settings.local.json` wiring them) shapes assistant behaviour
+    in this repo. Keep, edit, or delete to taste.
