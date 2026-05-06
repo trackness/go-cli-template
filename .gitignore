@@ -19,6 +19,3 @@ coverage.*
 .env
 .env.local
 
-# claude code local (per-developer; not template content)
-.claude/settings.local.json
-.claude/hooks/
